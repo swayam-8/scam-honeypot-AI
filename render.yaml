@@ -1,0 +1,33 @@
+# 1. PR PREVIEWS CONFIGURATION (Root Level)
+# This enables automatic previews for every Pull Request
+previews:
+  generation: automatic        # Options: automatic | manual
+  expireAfterDays: 5           # Automatically delete preview after 5 days of inactivity
+
+services:
+  # 2. YOUR MAIN SERVICE CONFIGURATION
+  - type: web
+    name: honey-pot-agent
+    runtime: python
+    region: singapore          # Optional: singapore, oregon, frankfurt, etc.
+    plan: free                 # Options: free, starter, standard
+    
+    # 3. AUTO-DEPLOY SETTING
+    # true = Deploy every push to main branch
+    # false = Manual deploy only
+    autoDeploy: true
+    
+    # Commands from your requirements
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    
+    # 4. ENVIRONMENT VARIABLES
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SECRET_API_KEY
+        sync: false            # "sync: false" means you set the value in Dashboard, not here (Safer)
+      - key: GROQ_KEYS
+        sync: false
+      - key: GEMINI_KEYS
+        sync: false
