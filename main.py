@@ -256,9 +256,13 @@ async def honey_pot(request: Request, background: BackgroundTasks):
     # ---- HANDLE EMPTY BODY (GUVI TESTER) ----
     raw_body = await request.body()
     if not raw_body:
-        if request.headers.get("x-api-key") != SECRET_API_KEY:
-            return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
-        return {"status": "success"}
+      if request.headers.get("x-api-key") != SECRET_API_KEY:
+        return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
+    return {
+        "status": "success",
+        "reply": "Endpoint reachable"
+    }
+
 
     # ---- PARSE REAL REQUESTS ----
     try:
