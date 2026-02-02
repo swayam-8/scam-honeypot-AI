@@ -246,18 +246,13 @@ def send_final_report(session_id, intel, turns):
         logger.error(f"Failed to send final report: {e}")
 
 # =========================================================
-# 10. API ENDPOINT
+# 10. API ENDPOINT - FIXED FOR GUVI TESTER
 # =========================================================
 @app.post("/honey-pot-entry")
 async def honey_pot(request: Request, background: BackgroundTasks):
     
-    # Log incoming request
-    logger.info("=" * 60)
-    logger.info("Received new request")
-    
     # API key check FIRST
     api_key = request.headers.get("x-api-key")
-    logger.info(f"API Key present: {bool(api_key)}")
     
     if not api_key or api_key != SECRET_API_KEY:
         logger.warning("Invalid or missing API key")
@@ -266,94 +261,63 @@ async def honey_pot(request: Request, background: BackgroundTasks):
             content={"detail": "Invalid API Key"}
         )
 
-    # Parse JSON safely
+    # Parse JSON body - handle all cases
     try:
         body = await request.json()
-        logger.info(f"Request body parsed successfully")
-        logger.info(f"Body keys: {list(body.keys()) if isinstance(body, dict) else 'Not a dict'}")
-    except Exception as e:
-        logger.error(f"Failed to parse JSON: {e}")
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "Invalid JSON body"}
-        )
+    except:
+        # If body parsing fails, return success for probe
+        logger.info("Could not parse body - returning probe response")
+        return {"status": "success", "reply": "Endpoint reachable"}
 
-    # Validate body structure
-    if not isinstance(body, dict):
-        logger.error("Body is not a dictionary")
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "Request body must be a JSON object"}
-        )
+    # CRITICAL: Handle empty body or probe requests
+    # GUVI sends {} to test if endpoint is alive
+    if not body or not isinstance(body, dict):
+        logger.info("Empty or invalid body - probe request")
+        return {"status": "success", "reply": "Endpoint reachable"}
 
-    # Handle probe/health check requests
+    # Check if this is a probe (missing required fields)
     if "message" not in body or "sessionId" not in body:
-        logger.info("Probe request detected")
-        return {
-            "status": "success",
-            "reply": "Endpoint reachable"
-        }
+        logger.info("Probe request - missing message or sessionId")
+        return {"status": "success", "reply": "Endpoint reachable"}
 
+    # Now process actual scam conversation
     message = body.get("message")
     session_id = body.get("sessionId", "unknown")
     
-    logger.info(f"Session ID: {session_id}")
-    
     # Validate message structure
     if not isinstance(message, dict):
-        logger.error("Message is not a dictionary")
-        return {
-            "status": "success",
-            "reply": "Endpoint reachable"
-        }
+        logger.info("Invalid message structure - probe request")
+        return {"status": "success", "reply": "Endpoint reachable"}
 
     user_text = message.get("text", "")
     sender = message.get("sender", "scammer")
     history = body.get("conversationHistory", [])
     
-    # Ensure history is a list
     if not isinstance(history, list):
         history = []
     
     turns = len(history) + 1
 
-    # Log conversation details
-    logger.info(f"Sender: {sender}, Turns: {turns}, Text length: {len(user_text)}")
-    logger.info(f"User text: {user_text[:100]}...")
-
-    # If no text or wrong sender
+    # If no text or wrong sender, return neutral
     if sender != "scammer" or not user_text:
         logger.warning("Empty text or wrong sender")
-        return {
-            "status": "success",
-            "reply": "Okay."
-        }
+        return {"status": "success", "reply": "Okay."}
 
-    # Combine all conversation text for intelligence extraction
+    # Combine conversation text
     combined_text = user_text + " " + " ".join(
         m.get("text", "") for m in history if isinstance(m, dict)
     )
 
     # Extract intelligence
     intel = extract_intel(combined_text)
-    logger.info(f"Intelligence extracted:")
-    logger.info(f"  - Bank Accounts: {len(intel['bankAccounts'])}")
-    logger.info(f"  - UPI IDs: {len(intel['upiIds'])}")
-    logger.info(f"  - Links: {len(intel['phishingLinks'])}")
-    logger.info(f"  - Phone Numbers: {len(intel['phoneNumbers'])}")
-    logger.info(f"  - Keywords: {intel['suspiciousKeywords']}")
-    logger.info(f"  - Scam Detected: {intel['scamDetected']}")
-
+    
     # Extract victim name
     victim_name = extract_name(user_text)
-    if victim_name:
-        logger.info(f"Victim name detected: {victim_name}")
 
     # Generate reply
     reply = generate_reply(history, user_text, victim_name)
-    logger.info(f"Generated reply: {reply}")
 
-    # Check if we should send final report
+    # Send final report if conditions met
     if (
         intel["scamDetected"]
         and turns >= 6
@@ -366,19 +330,12 @@ async def honey_pot(request: Request, background: BackgroundTasks):
     ):
         logger.info(f"Triggering final report for session {session_id}")
         background.add_task(send_final_report, session_id, intel, turns)
-    else:
-        logger.info(f"Not triggering report - Scam: {intel['scamDetected']}, Turns: {turns}, Critical Intel: {bool(intel['bankAccounts'] or intel['upiIds'] or intel['phoneNumbers'] or intel['phishingLinks'])}")
 
-    logger.info("=" * 60)
-    
-    return {
-        "status": "success",
-        "reply": reply
-    }
+    return {"status": "success", "reply": reply}
 
 
 # =========================================================
-# 11. HEALTH CHECK ENDPOINT
+# 11. HEALTH CHECK
 # =========================================================
 @app.get("/health")
 async def health_check():
