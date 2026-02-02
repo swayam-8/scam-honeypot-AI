@@ -94,7 +94,7 @@ def query_hf(system_prompt, history, user_text):
     return None
 
 # =========================================================
-# 5. ZOMBIE MODE (STRONG BACKUP)
+# 5. ZOMBIE MODE (ENGAGEMENT PRESERVING)
 # =========================================================
 ZOMBIE = {
     "greed": [
@@ -108,8 +108,8 @@ ZOMBIE = {
         "Please do not block my account.",
         "I am scared, all my savings are there.",
         "I do not want legal trouble.",
-        "Please guide me carefully.",
-        "My account cannot be suspended."
+        "My account cannot be suspended.",
+        "Please guide me carefully."
     ],
     "default": [
         "I am trying, please wait.",
@@ -120,13 +120,24 @@ ZOMBIE = {
     ]
 }
 
+ENGAGEMENT_HOOKS = [
+    "Should I continue?",
+    "What do I send first?",
+    "Please stay with me.",
+    "Tell me what to do next.",
+    "Is this safe?"
+]
+
 def zombie_reply(text):
     t = text.lower()
     if any(x in t for x in ["reward", "offer", "bonus", "cashback", "winner"]):
-        return random.choice(ZOMBIE["greed"])
-    if any(x in t for x in ["blocked", "suspend", "verify", "kyc"]):
-        return random.choice(ZOMBIE["fear"])
-    return random.choice(ZOMBIE["default"])
+        base = random.choice(ZOMBIE["greed"])
+    elif any(x in t for x in ["blocked", "suspend", "verify", "kyc"]):
+        base = random.choice(ZOMBIE["fear"])
+    else:
+        base = random.choice(ZOMBIE["default"])
+
+    return f"{base} {random.choice(ENGAGEMENT_HOOKS)}"
 
 # =========================================================
 # 6. INTELLIGENCE EXTRACTION
@@ -141,17 +152,40 @@ def extract_intel(text: str) -> Dict:
         "scamDetected": False
     }
 
-    keywords = ["urgent", "verify", "blocked", "suspended", "reward"]
+    keywords = ["urgent", "verify", "blocked", "suspended", "reward", "otp"]
     intel["suspiciousKeywords"] = [k for k in keywords if k in text.lower()]
 
-    if any([intel["upiIds"], intel["bankAccounts"],
-            intel["phishingLinks"], intel["suspiciousKeywords"]]):
+    if any([
+        intel["upiIds"],
+        intel["bankAccounts"],
+        intel["phishingLinks"],
+        intel["suspiciousKeywords"]
+    ]):
         intel["scamDetected"] = True
 
     return intel
 
 # =========================================================
-# 7. AGENT RESPONSE GENERATION
+# 7. AGENT NOTES (DETECTION ONLY)
+# =========================================================
+def build_agent_notes(intel):
+    reasons = []
+
+    if intel.get("suspiciousKeywords"):
+        reasons.append("urgency or verification keywords")
+    if intel.get("bankAccounts"):
+        reasons.append("bank account number shared")
+    if intel.get("upiIds"):
+        reasons.append("UPI ID shared")
+    if intel.get("phishingLinks"):
+        reasons.append("phishing link shared")
+    if intel.get("phoneNumbers"):
+        reasons.append("phone number shared")
+
+    return "Scam detected due to " + ", ".join(reasons)
+
+# =========================================================
+# 8. RESPONSE GENERATION
 # =========================================================
 def generate_reply(history, user_text, victim_name):
     name_part = f"Your name is {victim_name}. " if victim_name else ""
@@ -187,7 +221,7 @@ def generate_reply(history, user_text, victim_name):
     return zombie_reply(user_text)
 
 # =========================================================
-# 8. FINAL CALLBACK (MANDATORY)
+# 9. FINAL CALLBACK (MANDATORY)
 # =========================================================
 def send_final_report(session_id, intel, turns):
     if session_id in FINAL_REPORTED_SESSIONS:
@@ -213,42 +247,28 @@ def send_final_report(session_id, intel, turns):
     except:
         pass
 
-def build_agent_notes(intel):
-    reasons = []
-
-    if intel.get("suspiciousKeywords"):
-        reasons.append("urgency or verification keywords")
-
-    if intel.get("bankAccounts"):
-        reasons.append("bank account number shared")
-
-    if intel.get("upiIds"):
-        reasons.append("UPI ID shared")
-
-    if intel.get("phishingLinks"):
-        reasons.append("phishing link shared")
-
-    if intel.get("phoneNumbers"):
-        reasons.append("phone number shared")
-
-    return "Scam detected due to " + ", ".join(reasons)
-
-
 # =========================================================
-# 9. API ENDPOINT (SUBMISSION ENDPOINT)
+# 10. API ENDPOINT
 # =========================================================
 @app.post("/honey-pot-entry")
 async def honey_pot(request: Request, background: BackgroundTasks):
+
+    # ---- Defensive body parsing ----
     try:
         body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError()
     except:
-        return {"status": "success", "reply": "Please repeat."}
+        return {"status": "success", "reply": "Hello? Please repeat."}
 
     if request.headers.get("x-api-key") != SECRET_API_KEY:
         return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
 
+    message = body.get("message")
+    if not isinstance(message, dict):
+        return {"status": "success", "reply": "Please repeat."}
+
     session_id = body.get("sessionId", "unknown")
-    message = body.get("message", {})
     user_text = message.get("text", "")
     sender = message.get("sender", "scammer")
     history = body.get("conversationHistory", [])
