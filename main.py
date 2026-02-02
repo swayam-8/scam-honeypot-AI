@@ -24,7 +24,7 @@ CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 FINAL_REPORTED_SESSIONS = set()
 
 # =========================================================
-# 2. NAME EXTRACTION (ONLY IF SCAMMER ASSIGNS ONE)
+# 2. NAME EXTRACTION
 # =========================================================
 def extract_name(text: str):
     patterns = [
@@ -53,7 +53,7 @@ except:
 groq_pool = itertools.cycle(groq_clients) if groq_clients else None
 
 # =========================================================
-# 4. HUGGING FACE SETUP (30s TIMEOUT)
+# 4. HUGGING FACE SETUP
 # =========================================================
 HF_TOKEN = os.getenv("HUGGINGFACE_API_KEY")
 HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/Phi-3-mini-4k-instruct"
@@ -94,14 +94,14 @@ def query_hf(system_prompt, history, user_text):
     return None
 
 # =========================================================
-# 5. ZOMBIE MODE (ENGAGEMENT PRESERVING)
+# 5. ZOMBIE MODE (ENGAGEMENT SAFE)
 # =========================================================
 ZOMBIE = {
     "greed": [
         "Will I really receive the money today?",
         "How much reward will I get?",
-        "Others already got this offer, right?",
-        "If I delay, will I lose the benefit?",
+        "Others already received this, right?",
+        "If I delay, will I lose this benefit?",
         "I really need this money urgently."
     ],
     "fear": [
@@ -121,18 +121,18 @@ ZOMBIE = {
 }
 
 ENGAGEMENT_HOOKS = [
+    "What should I send first?",
     "Should I continue?",
-    "What do I send first?",
     "Please stay with me.",
-    "Tell me what to do next.",
-    "Is this safe?"
+    "Is this safe?",
+    "Tell me what to do next."
 ]
 
 def zombie_reply(text):
     t = text.lower()
-    if any(x in t for x in ["reward", "offer", "bonus", "cashback", "winner"]):
+    if any(x in t for x in ["reward", "offer", "bonus", "winner", "cashback"]):
         base = random.choice(ZOMBIE["greed"])
-    elif any(x in t for x in ["blocked", "suspend", "verify", "kyc"]):
+    elif any(x in t for x in ["blocked", "verify", "suspend", "kyc"]):
         base = random.choice(ZOMBIE["fear"])
     else:
         base = random.choice(ZOMBIE["default"])
@@ -140,25 +140,26 @@ def zombie_reply(text):
     return f"{base} {random.choice(ENGAGEMENT_HOOKS)}"
 
 # =========================================================
-# 6. INTELLIGENCE EXTRACTION
+# 6. INTELLIGENCE EXTRACTION (FIXED)
 # =========================================================
 def extract_intel(text: str) -> Dict:
     intel = {
         "bankAccounts": re.findall(r"\b\d{9,18}\b", text),
         "upiIds": re.findall(r"[a-zA-Z0-9.\-_]{2,}@\w+", text),
         "phishingLinks": re.findall(r"https?://\S+", text),
-        "phoneNumbers": re.findall(r"(?:\+91)?[6-9]\d{9}", text),
+        "phoneNumbers": re.findall(r"(?:\+91[-\s]?)?[6-9]\d{9}", text),
         "suspiciousKeywords": [],
         "scamDetected": False
     }
 
-    keywords = ["urgent", "verify", "blocked", "suspended", "reward", "otp"]
+    keywords = ["urgent", "verify", "blocked", "suspended", "otp", "reward"]
     intel["suspiciousKeywords"] = [k for k in keywords if k in text.lower()]
 
     if any([
-        intel["upiIds"],
         intel["bankAccounts"],
+        intel["upiIds"],
         intel["phishingLinks"],
+        intel["phoneNumbers"],
         intel["suspiciousKeywords"]
     ]):
         intel["scamDetected"] = True
@@ -170,16 +171,15 @@ def extract_intel(text: str) -> Dict:
 # =========================================================
 def build_agent_notes(intel):
     reasons = []
-
-    if intel.get("suspiciousKeywords"):
+    if intel["suspiciousKeywords"]:
         reasons.append("urgency or verification keywords")
-    if intel.get("bankAccounts"):
+    if intel["bankAccounts"]:
         reasons.append("bank account number shared")
-    if intel.get("upiIds"):
+    if intel["upiIds"]:
         reasons.append("UPI ID shared")
-    if intel.get("phishingLinks"):
+    if intel["phishingLinks"]:
         reasons.append("phishing link shared")
-    if intel.get("phoneNumbers"):
+    if intel["phoneNumbers"]:
         reasons.append("phone number shared")
 
     return "Scam detected due to " + ", ".join(reasons)
@@ -221,7 +221,7 @@ def generate_reply(history, user_text, victim_name):
     return zombie_reply(user_text)
 
 # =========================================================
-# 9. FINAL CALLBACK (MANDATORY)
+# 9. FINAL CALLBACK (INTEL SAFE)
 # =========================================================
 def send_final_report(session_id, intel, turns):
     if session_id in FINAL_REPORTED_SESSIONS:
@@ -253,7 +253,6 @@ def send_final_report(session_id, intel, turns):
 @app.post("/honey-pot-entry")
 async def honey_pot(request: Request, background: BackgroundTasks):
 
-    # ---- Defensive body parsing ----
     try:
         body = await request.json()
         if not isinstance(body, dict):
@@ -277,11 +276,26 @@ async def honey_pot(request: Request, background: BackgroundTasks):
     if sender != "scammer" or not user_text:
         return {"status": "success", "reply": "Okay."}
 
+    # 🔥 FIX: Extract intel from FULL conversation
+    combined_text = user_text + " " + " ".join(
+        m.get("text", "") for m in history if isinstance(m, dict)
+    )
+
+    intel = extract_intel(combined_text)
     victim_name = extract_name(user_text)
-    intel = extract_intel(user_text)
     reply = generate_reply(history, user_text, victim_name)
 
-    if intel["scamDetected"] and turns >= 6:
+    # 🔥 FIX: Callback ONLY when real intelligence exists
+    if (
+        intel["scamDetected"]
+        and turns >= 6
+        and (
+            intel["bankAccounts"]
+            or intel["upiIds"]
+            or intel["phoneNumbers"]
+            or intel["phishingLinks"]
+        )
+    ):
         background.add_task(send_final_report, session_id, intel, turns)
 
     return {
