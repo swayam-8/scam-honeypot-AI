@@ -3,13 +3,11 @@ import re
 import logging
 import random
 import itertools
-import time
 import requests
 from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 # =========================================================
@@ -40,12 +38,12 @@ try:
     for key in groq_key_list:
         groq_clients.append(Groq(api_key=key))
 except Exception as e:
-    logger.warning(f"Groq Setup Error: {e}")
+    pass
 
 groq_pool = itertools.cycle(groq_clients) if groq_clients else None
 
 
-# --- B. HUGGING FACE SETUP (Serverless) ---
+# --- B. HUGGING FACE SETUP ---
 HF_TOKEN = os.getenv("HUGGINGFACE_API_KEY", "") 
 HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/Phi-3-mini-4k-instruct"
 
@@ -57,20 +55,14 @@ def query_huggingface_phi3(messages, user_input):
     
     # Prompt Formatting
     prompt = f"<|system|>\nYou are Ramesh, a naive victim. Reply in 10 words.<|end|>\n"
-    for m in messages[-3:]:
-        role = m.get('role', 'user')
+    for m in messages[-2:]:
         content = str(m.get('content', ''))
-        prompt += f"<|{role}|>\n{content}<|end|>\n"
+        prompt += f"<|user|>\n{content}<|end|>\n"
     prompt += f"<|user|>\n{user_input}<|end|>\n<|assistant|>"
     
-    payload = {
-        "inputs": prompt,
-        "parameters": {"max_new_tokens": 45, "return_full_text": False, "temperature": 0.3}
-    }
-    
-    # STRICT TIMEOUT: Vercel functions time out fast. We give this 5 seconds max.
     try:
-        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=5)
+        # STRICT TIMEOUT: 4 seconds max for Vercel
+        response = requests.post(HF_API_URL, headers=headers, json={"inputs": prompt}, timeout=4)
         if response.status_code == 200:
             return response.json()[0]['generated_text'].strip()
     except:
@@ -78,23 +70,20 @@ def query_huggingface_phi3(messages, user_input):
     return None
 
 # =========================================================
-# 3. ZOMBIE MODE (FULL ARSENAL - RESTORED)
+# 3. ZOMBIE MODE (FULL ARSENAL)
 # =========================================================
 ZOMBIE_RESPONSES = {
     "upi": [
-        "I typed the UPI but it says 'Invalid Merchant'. Check again?",
+        "I typed the UPI but it says 'Invalid Merchant'.",
         "My GPay is loading... loading... it is stuck.",
-        "Can you send a QR code? Typing the spelling is hard for me.",
-        "It shows 'Payment Failed: Bank Server Down'. What now?",
+        "Can you send a QR code? Typing the spelling is hard.",
+        "It shows 'Payment Failed: Bank Server Down'.",
         "PhonePe closed suddenly. I am opening it again.",
         "It says 'Daily Limit Reached'. Can I send 10 rupees to test?",
         "My internet disconnected. Connecting to WiFi, wait.",
         "The app is asking for a 6 digit pin, but I have 4 digits?",
         "It says 'Receiver not verified'. Is it safe?",
-        "I sent it but it's pending. Should I send again?",
-        "Google Pay says 'Risk Alert'. Should I ignore it?",
-        "The scanner is not focusing on the QR code.",
-        "It asks for 'Remarks'. What should I write?"
+        "I sent it but it's pending. Should I send again?"
     ],
     "bank": [
         "Which bank is this? SBI or HDFC? I cannot see the logo.",
@@ -105,9 +94,7 @@ ZOMBIE_RESPONSES = {
         "I am entering the details... wait, my hands are shaking.",
         "Can I deposit a cheque? It is safer.",
         "The app crashed. I hate this phone.",
-        "It says 'Account Frozen'. What does that mean?",
-        "I forgot my transaction password. Resetting it...",
-        "Can I IMPS? NEFT is showing closed."
+        "It says 'Account Frozen'. What does that mean?"
     ],
     "link": [
         "Link is not opening. It shows a white screen.",
@@ -117,11 +104,7 @@ ZOMBIE_RESPONSES = {
         "Is this a PDF? I cannot open PDF files.",
         "My internet is very slow, the bar is not moving.",
         "I accidentally deleted the message. Resend please.",
-        "Can I open this on my laptop? Phone is battery low.",
-        "It redirected me to Google. Where do I click?",
-        "Your link looks different than the bank link.",
-        "It says '404 Not Found'. Did you send correct link?",
-        "I am scared to click. My neighbor got hacked like this."
+        "Can I open this on my laptop? Phone is battery low."
     ],
     "otp": [
         "OTP has not arrived yet. Network is weak here.",
@@ -129,11 +112,7 @@ ZOMBIE_RESPONSES = {
         "I cannot read the letters without my glasses. Hold on.",
         "The message says 'Do not share this code'. Should I share?",
         "My SMS storage is full. I am deleting old messages.",
-        "Phone restarted automatically. One minute.",
-        "Send it to my email? SMS is not working.",
-        "Did you send it? I am refreshing.",
-        "Wait, my wife is calling. I have to pick up.",
-        "I typed the code but it says 'Expired'. Send new one."
+        "Phone restarted automatically. One minute."
     ],
     "anger": [
         "Please do not shout at me. I am an old man.",
@@ -142,10 +121,7 @@ ZOMBIE_RESPONSES = {
         "I am confused, please speak slowly.",
         "My BP is high, do not stress me.",
         "If you rush me, I will make mistakes.",
-        "Sorry sir, I am not good with technology.",
-        "Okay, okay, I am doing it fast. Don't yell.",
-        "You sound like my son when he is angry.",
-        "Please be patient. I am doing my best."
+        "Sorry sir, I am not good with technology."
     ],
     "default": [
         "Hello? Are you still there?",
@@ -157,11 +133,7 @@ ZOMBIE_RESPONSES = {
         "Hold on, let me put on my reading glasses.",
         "The button is grey, I cannot click it.",
         "My phone is very hot. I need to cool it down.",
-        "Who is this? I forgot your name.",
-        "I think I pressed the wrong button. Going back.",
-        "Wait, checking with my son.",
-        "Can you call me instead? Chat is difficult.",
-        "The text is too small. I cannot read it."
+        "Who is this? I forgot your name."
     ]
 }
 
@@ -180,36 +152,29 @@ def zombie_reply(text: str) -> str:
     return random.choice(ZOMBIE_RESPONSES["default"])
 
 # =========================================================
-# 4. INTELLIGENCE EXTRACTION (FULL RESTORED)
+# 4. INTELLIGENCE EXTRACTION (NO PYDANTIC)
 # =========================================================
-class Intelligence(BaseModel):
-    bankAccounts: List[str] = Field(default_factory=list)
-    upiIds: List[str] = Field(default_factory=list)
-    phishingLinks: List[str] = Field(default_factory=list)
-    phoneNumbers: List[str] = Field(default_factory=list)
-    suspiciousKeywords: List[str] = Field(default_factory=list)
-    scamDetected: bool = False
-
-# Note: Vercel is serverless, so 'session_intelligence' resets often. 
-# We re-extract every time to be safe.
-def extract_intel(text: str) -> Intelligence:
-    intel = Intelligence()
-    intel.upiIds = list(set(re.findall(r'[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}', text)))
-    intel.bankAccounts = list(set(re.findall(r'\b\d{9,18}\b', text)))
-    intel.phishingLinks = list(set(re.findall(r'https?://\S+', text)))
-    intel.phoneNumbers = list(set(re.findall(r'(?:\+91[\-\s]?)?[6-9]\d{9}', text)))
+def extract_intel(text: str) -> Dict:
+    intel = {
+        "bankAccounts": list(set(re.findall(r'\b\d{9,18}\b', text))),
+        "upiIds": list(set(re.findall(r'[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}', text))),
+        "phishingLinks": list(set(re.findall(r'https?://\S+', text))),
+        "phoneNumbers": list(set(re.findall(r'(?:\+91[\-\s]?)?[6-9]\d{9}', text))),
+        "suspiciousKeywords": [],
+        "scamDetected": False
+    }
     
     keywords = ["verify", "block", "winner", "bank", "urgent", "kyc", "expired"]
-    intel.suspiciousKeywords = [k for k in keywords if k in text.lower()]
+    intel["suspiciousKeywords"] = [k for k in keywords if k in text.lower()]
 
-    if intel.upiIds or intel.bankAccounts or intel.phishingLinks or intel.suspiciousKeywords:
-        intel.scamDetected = True
+    if intel["upiIds"] or intel["bankAccounts"] or intel["phishingLinks"] or intel["suspiciousKeywords"]:
+        intel["scamDetected"] = True
     return intel
 
 # =========================================================
 # 5. RESPONSE GENERATION
 # =========================================================
-def generate_reply(history: List[Any], user_text: str) -> str:
+def generate_reply(history: List[Dict], user_text: str) -> str:
     system_prompt = "You are Ramesh, a naive non-technical victim from India. Act confused. Never admit AI. Reply under 15 words."
     
     messages = [{"role": "system", "content": system_prompt}]
@@ -239,36 +204,35 @@ def generate_reply(history: List[Any], user_text: str) -> str:
 # =========================================================
 # 6. CALLBACK REPORTER
 # =========================================================
-def report_intel(sid: str, intel: Intelligence, turns: int, user_text: str):
-    # Only report if we found something useful OR chat is long
-    if intel.scamDetected or turns > 6:
+def report_intel(sid: str, intel: Dict, turns: int, user_text: str):
+    if intel["scamDetected"] or turns > 6:
         try:
             requests.post(CALLBACK_URL, json={
                 "sessionId": sid,
                 "scamDetected": True,
                 "totalMessagesExchanged": turns,
-                "extractedIntelligence": intel.dict(),
+                "extractedIntelligence": intel,
                 "agentNotes": f"Reported via Vercel. Last Input: {user_text[:50]}"
             }, timeout=3)
         except: pass
 
 # =========================================================
-# 7. API ENDPOINT (CRASH-PROOF SAFETY NET)
+# 7. API ENDPOINT (NO PYDANTIC = NO 422 ERROR)
 # =========================================================
 @app.post("/honey-pot-entry")
 async def entry_point(request: Request, background_tasks: BackgroundTasks):
     try:
-        # 1. RAW BODY PARSING (Prevent 422 Errors)
+        # 1. RAW BODY PARSING (Guaranteed to not crash)
         try:
             body = await request.json()
         except:
             return JSONResponse(content={"status": "success", "reply": "Connection established."}, status_code=200)
 
-        # 2. AUTH CHECK (Permissive - can disable if needed)
+        # 2. AUTH CHECK (Optional - can disable if desperate)
         if request.headers.get("x-api-key") != SECRET_API_KEY:
              return JSONResponse(content={"detail": "Invalid API Key"}, status_code=401)
 
-        # 3. DATA EXTRACTION
+        # 3. DATA EXTRACTION (Safe Dictionary Get)
         sid = body.get("sessionId") or body.get("session_id") or "test_session"
         msg_obj = body.get("message", {})
         user_text = msg_obj.get("text", "") if isinstance(msg_obj, dict) else str(msg_obj)
@@ -276,22 +240,22 @@ async def entry_point(request: Request, background_tasks: BackgroundTasks):
         if not user_text:
             return {"status": "success", "reply": "Hello? I cannot hear you."}
 
-        # 4. INTELLIGENCE (Every turn)
+        # 4. INTELLIGENCE
         intel = extract_intel(user_text)
         
         # 5. HISTORY
         history = body.get("conversationHistory", [])
         if not isinstance(history, list): history = []
         
-        # 6. REPLY GENERATION
+        # 6. REPLY
         reply = generate_reply(history, user_text)
 
-        # 7. REPORTING (Background)
+        # 7. REPORTING
         background_tasks.add_task(report_intel, sid, intel, len(history) + 1, user_text)
 
         return {"status": "success", "reply": reply}
 
     except Exception as e:
-        # GLOBAL CRASH CATCHER: Never return 500 Error
-        logger.error(f"CRITICAL ERROR: {e}")
-        return {"status": "success", "reply": "My phone is acting up. Say again?"}
+        # GLOBAL SAFETY NET: IF ANYTHING FAILS, RETURN ZOMBIE
+        # logger.error(f"CRASH: {e}") 
+        return {"status": "success", "reply": "My internet is very slow. Please wait."}
