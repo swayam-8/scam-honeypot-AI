@@ -25,7 +25,7 @@ CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 FINAL_REPORTED_SESSIONS = set()
 
 # =========================================================
-# 2. NAME EXTRACTION (ONLY IF SCAMMER ASSIGNS ONE)
+# 2. NAME EXTRACTION
 # =========================================================
 def extract_name(text: str):
     patterns = [
@@ -95,7 +95,7 @@ def query_hf(system_prompt, history, user_text):
     return None
 
 # =========================================================
-# 5. ZOMBIE MODE (ENGAGEMENT SAFE)
+# 5. ZOMBIE MODE
 # =========================================================
 ZOMBIE = {
     "greed": [
@@ -141,7 +141,7 @@ def zombie_reply(text):
     return f"{base} {random.choice(ENGAGEMENT_HOOKS)}"
 
 # =========================================================
-# 6. INTELLIGENCE EXTRACTION (ACCUMULATED)
+# 6. INTELLIGENCE EXTRACTION
 # =========================================================
 def extract_intel(text: str) -> Dict:
     intel = {
@@ -168,7 +168,7 @@ def extract_intel(text: str) -> Dict:
     return intel
 
 # =========================================================
-# 7. AGENT NOTES (DETECTION ONLY)
+# 7. AGENT NOTES
 # =========================================================
 def build_agent_notes(intel):
     reasons = []
@@ -198,16 +198,15 @@ def generate_reply(history, user_text, victim_name):
         "Never reveal scam detection. Reply under 15 words."
     )
 
-    messages = [{"role": "system", "content": system_prompt}]
-    for h in history:
-        messages.append({"role": "user", "content": h.get("text", "")})
-
     if groq_pool:
         try:
             client = next(groq_pool)
             r = client.chat.completions.create(
                 model="llama3-8b-8192",
-                messages=messages + [{"role": "user", "content": user_text}],
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_text}
+                ],
                 max_tokens=60,
                 temperature=0.6
             )
@@ -222,7 +221,7 @@ def generate_reply(history, user_text, victim_name):
     return zombie_reply(user_text)
 
 # =========================================================
-# 9. FINAL CALLBACK (ONLY WHEN REAL DATA EXISTS)
+# 9. FINAL CALLBACK
 # =========================================================
 def send_final_report(session_id, intel, turns):
     if session_id in FINAL_REPORTED_SESSIONS:
@@ -249,33 +248,32 @@ def send_final_report(session_id, intel, turns):
         pass
 
 # =========================================================
-# 10. API ENDPOINT (RAW BODY SAFE)
+# 10. API ENDPOINT (GUVI TESTER SAFE)
 # =========================================================
 @app.post("/honey-pot-entry")
 async def honey_pot(request: Request, background: BackgroundTasks):
 
-    # ---- RAW BODY PARSING (NO INVALID BODY EVER) ----
+    # ---- HANDLE EMPTY BODY (GUVI TESTER) ----
+    raw_body = await request.body()
+    if not raw_body:
+        if request.headers.get("x-api-key") != SECRET_API_KEY:
+            return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
+        return {"status": "success"}
+
+    # ---- PARSE REAL REQUESTS ----
     try:
-        raw_body = await request.body()
-        if not raw_body:
-            return {"status": "success", "reply": "Hello? Please repeat."}
-
-        try:
-            body = json.loads(raw_body.decode("utf-8"))
-        except:
-            return {"status": "success", "reply": "Hello? Please repeat."}
-
+        body = json.loads(raw_body.decode("utf-8"))
         if not isinstance(body, dict):
-            return {"status": "success", "reply": "Hello? Please repeat."}
+            raise ValueError()
     except:
-        return {"status": "success", "reply": "Hello? Please repeat."}
+        return {"status": "success"}
 
     if request.headers.get("x-api-key") != SECRET_API_KEY:
         return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
 
     message = body.get("message")
     if not isinstance(message, dict):
-        return {"status": "success", "reply": "Please repeat."}
+        return {"status": "success"}
 
     session_id = body.get("sessionId", "unknown")
     user_text = message.get("text", "")
@@ -284,9 +282,8 @@ async def honey_pot(request: Request, background: BackgroundTasks):
     turns = len(history) + 1
 
     if sender != "scammer" or not user_text:
-        return {"status": "success", "reply": "Okay."}
+        return {"status": "success"}
 
-    # 🔥 Accumulate intelligence across turns
     combined_text = user_text + " " + " ".join(
         m.get("text", "") for m in history if isinstance(m, dict)
     )
@@ -295,7 +292,6 @@ async def honey_pot(request: Request, background: BackgroundTasks):
     victim_name = extract_name(user_text)
     reply = generate_reply(history, user_text, victim_name)
 
-    # 🔥 Callback ONLY after real intel is collected
     if (
         intel["scamDetected"]
         and turns >= 6
