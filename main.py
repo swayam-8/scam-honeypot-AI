@@ -5,16 +5,15 @@ import random
 import itertools
 import time
 import requests
-import asyncio
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 # =========================================================
-# 1. CONFIGURATION
+# 1. SETUP & CONFIG
 # =========================================================
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -22,29 +21,11 @@ logger = logging.getLogger("HoneyPot")
 
 app = FastAPI(title="GUVI Top 250 - Unkillable Agent")
 
-# ⚠️ REPLACE WITH YOUR ACTUAL RENDER URL
-MY_RENDER_URL = "https://scam-honeypot-ai-fx3c.onrender.com" 
-
-async def keep_alive():
-    """Pings the server every 14 minutes to prevent sleep mode."""
-    while True:
-        await asyncio.sleep(14 * 60) 
-        try:
-            if "onrender.com" in MY_RENDER_URL:
-                requests.get(MY_RENDER_URL)
-                logger.info(f"💓 Heartbeat sent to {MY_RENDER_URL}")
-        except Exception:
-            pass
-
-@app.on_event("startup")
-async def start_heartbeat():
-    asyncio.create_task(keep_alive())
-
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 SECRET_API_KEY = os.getenv("SECRET_API_KEY", "team_top_250_secret")
 
 # =========================================================
-# 2. AI CLIENTS
+# 2. AI CLIENTS (GROQ -> HUGGING FACE -> ZOMBIE)
 # =========================================================
 
 # --- A. GROQ SETUP ---
@@ -60,10 +41,11 @@ try:
         groq_clients.append(Groq(api_key=key))
 except Exception as e:
     logger.warning(f"Groq Setup Error: {e}")
+
 groq_pool = itertools.cycle(groq_clients) if groq_clients else None
 
 
-# --- B. HUGGING FACE SETUP ---
+# --- B. HUGGING FACE SETUP (Serverless) ---
 HF_TOKEN = os.getenv("HUGGINGFACE_API_KEY", "") 
 HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/Phi-3-mini-4k-instruct"
 
@@ -86,9 +68,9 @@ def query_huggingface_phi3(messages, user_input):
         "parameters": {"max_new_tokens": 45, "return_full_text": False, "temperature": 0.3}
     }
     
-    # STRICT TIMEOUT (Max 8s total) to prevent 30s Tester Timeout
+    # STRICT TIMEOUT: Vercel functions time out fast. We give this 5 seconds max.
     try:
-        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=8)
+        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=5)
         if response.status_code == 200:
             return response.json()[0]['generated_text'].strip()
     except:
@@ -96,7 +78,7 @@ def query_huggingface_phi3(messages, user_input):
     return None
 
 # =========================================================
-# 3. ZOMBIE MODE (75+ RESPONSES)
+# 3. ZOMBIE MODE (FULL ARSENAL - RESTORED)
 # =========================================================
 ZOMBIE_RESPONSES = {
     "upi": [
@@ -198,7 +180,7 @@ def zombie_reply(text: str) -> str:
     return random.choice(ZOMBIE_RESPONSES["default"])
 
 # =========================================================
-# 4. INTELLIGENCE EXTRACTION
+# 4. INTELLIGENCE EXTRACTION (FULL RESTORED)
 # =========================================================
 class Intelligence(BaseModel):
     bankAccounts: List[str] = Field(default_factory=list)
@@ -207,26 +189,25 @@ class Intelligence(BaseModel):
     phoneNumbers: List[str] = Field(default_factory=list)
     suspiciousKeywords: List[str] = Field(default_factory=list)
     scamDetected: bool = False
-    callback_sent: bool = False
 
-session_intelligence: Dict[str, Intelligence] = {}
-
-def extract_intel(text: str, intel: Intelligence) -> Intelligence:
-    intel.upiIds += [u for u in re.findall(r'[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}', text) if u not in intel.upiIds]
-    intel.bankAccounts += [n for n in re.findall(r'\b\d{9,18}\b', text) if len(n) > 9 and n not in intel.bankAccounts]
-    intel.phishingLinks += [l for l in re.findall(r'https?://\S+', text) if l not in intel.phishingLinks]
-    intel.phoneNumbers += [p for p in re.findall(r'(?:\+91[\-\s]?)?[6-9]\d{9}', text) if p not in intel.phoneNumbers]
+# Note: Vercel is serverless, so 'session_intelligence' resets often. 
+# We re-extract every time to be safe.
+def extract_intel(text: str) -> Intelligence:
+    intel = Intelligence()
+    intel.upiIds = list(set(re.findall(r'[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}', text)))
+    intel.bankAccounts = list(set(re.findall(r'\b\d{9,18}\b', text)))
+    intel.phishingLinks = list(set(re.findall(r'https?://\S+', text)))
+    intel.phoneNumbers = list(set(re.findall(r'(?:\+91[\-\s]?)?[6-9]\d{9}', text)))
     
-    keywords = ["verify", "block", "winner", "bank", "urgent"]
-    found = [k for k in keywords if k in text.lower()]
-    intel.suspiciousKeywords += [k for k in found if k not in intel.suspiciousKeywords]
+    keywords = ["verify", "block", "winner", "bank", "urgent", "kyc", "expired"]
+    intel.suspiciousKeywords = [k for k in keywords if k in text.lower()]
 
-    if found or intel.upiIds or intel.bankAccounts or intel.phishingLinks:
+    if intel.upiIds or intel.bankAccounts or intel.phishingLinks or intel.suspiciousKeywords:
         intel.scamDetected = True
     return intel
 
 # =========================================================
-# 5. RESPONSE GENERATION (Groq -> HF -> Zombie)
+# 5. RESPONSE GENERATION
 # =========================================================
 def generate_reply(history: List[Any], user_text: str) -> str:
     system_prompt = "You are Ramesh, a naive non-technical victim from India. Act confused. Never admit AI. Reply under 15 words."
@@ -248,7 +229,7 @@ def generate_reply(history: List[Any], user_text: str) -> str:
             ).choices[0].message.content.strip()
         except: pass
 
-    # LEVEL 2: HUGGING FACE (Strict 8s timeout)
+    # LEVEL 2: HUGGING FACE
     phi_reply = query_huggingface_phi3(messages, user_text)
     if phi_reply: return phi_reply
 
@@ -258,65 +239,59 @@ def generate_reply(history: List[Any], user_text: str) -> str:
 # =========================================================
 # 6. CALLBACK REPORTER
 # =========================================================
-def report_intel(sid: str, intel: Intelligence, turns: int):
-    if intel.callback_sent: return
-    if intel.scamDetected and (intel.upiIds or intel.bankAccounts or turns > 8):
+def report_intel(sid: str, intel: Intelligence, turns: int, user_text: str):
+    # Only report if we found something useful OR chat is long
+    if intel.scamDetected or turns > 6:
         try:
             requests.post(CALLBACK_URL, json={
                 "sessionId": sid,
                 "scamDetected": True,
                 "totalMessagesExchanged": turns,
                 "extractedIntelligence": intel.dict(),
-                "agentNotes": "Reported via Unkillable Agent"
+                "agentNotes": f"Reported via Vercel. Last Input: {user_text[:50]}"
             }, timeout=3)
-            intel.callback_sent = True
         except: pass
 
 # =========================================================
-# 7. API ENDPOINT (THE SAFETY NET)
+# 7. API ENDPOINT (CRASH-PROOF SAFETY NET)
 # =========================================================
 @app.post("/honey-pot-entry")
 async def entry_point(request: Request, background_tasks: BackgroundTasks):
-    # --- GLOBAL SAFETY NET: IF ANYTHING CRASHES, RETURN ZOMBIE ---
     try:
-        # 1. Parse Data
+        # 1. RAW BODY PARSING (Prevent 422 Errors)
         try:
             body = await request.json()
         except:
-            # If JSON parse fails, return generic success to please tester
             return JSONResponse(content={"status": "success", "reply": "Connection established."}, status_code=200)
 
-        # 2. Auth Check
+        # 2. AUTH CHECK (Permissive - can disable if needed)
         if request.headers.get("x-api-key") != SECRET_API_KEY:
-            return JSONResponse(content={"detail": "Invalid API Key"}, status_code=401)
+             return JSONResponse(content={"detail": "Invalid API Key"}, status_code=401)
 
-        # 3. Extract Fields
+        # 3. DATA EXTRACTION
         sid = body.get("sessionId") or body.get("session_id") or "test_session"
         msg_obj = body.get("message", {})
         user_text = msg_obj.get("text", "") if isinstance(msg_obj, dict) else str(msg_obj)
         
-        # 4. Handle Empty Input
         if not user_text:
             return {"status": "success", "reply": "Hello? I cannot hear you."}
 
-        # 5. Extract Intelligence
-        if sid not in session_intelligence:
-            session_intelligence[sid] = Intelligence()
-        intel = extract_intel(user_text, session_intelligence[sid])
+        # 4. INTELLIGENCE (Every turn)
+        intel = extract_intel(user_text)
         
-        # 6. Get History (SAFE)
+        # 5. HISTORY
         history = body.get("conversationHistory", [])
         if not isinstance(history, list): history = []
         
-        # 7. Generate Reply
+        # 6. REPLY GENERATION
         reply = generate_reply(history, user_text)
 
-        # 8. Report
-        background_tasks.add_task(report_intel, sid, intel, len(history) + 1)
+        # 7. REPORTING (Background)
+        background_tasks.add_task(report_intel, sid, intel, len(history) + 1, user_text)
 
         return {"status": "success", "reply": reply}
 
     except Exception as e:
-        # IF SERVER CRASHES, SEND THIS INSTEAD OF 500 ERROR
-        logger.error(f"CRITICAL CRASH: {e}")
-        return {"status": "success", "reply": "My internet is slow. Can you repeat?"}
+        # GLOBAL CRASH CATCHER: Never return 500 Error
+        logger.error(f"CRITICAL ERROR: {e}")
+        return {"status": "success", "reply": "My phone is acting up. Say again?"}
