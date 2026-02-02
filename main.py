@@ -204,7 +204,7 @@ def send_final_report(session_id, intel, turns):
             "phoneNumbers": intel["phoneNumbers"],
             "suspiciousKeywords": intel["suspiciousKeywords"]
         },
-        "agentNotes": "Victim showed fear and greed; scammer used urgency and payment redirection"
+        "agentNotes": build_agent_notes(intel)
     }
 
     try:
@@ -212,6 +212,27 @@ def send_final_report(session_id, intel, turns):
         FINAL_REPORTED_SESSIONS.add(session_id)
     except:
         pass
+
+def build_agent_notes(intel):
+    reasons = []
+
+    if intel.get("suspiciousKeywords"):
+        reasons.append("urgency or verification keywords")
+
+    if intel.get("bankAccounts"):
+        reasons.append("bank account number shared")
+
+    if intel.get("upiIds"):
+        reasons.append("UPI ID shared")
+
+    if intel.get("phishingLinks"):
+        reasons.append("phishing link shared")
+
+    if intel.get("phoneNumbers"):
+        reasons.append("phone number shared")
+
+    return "Scam detected due to " + ", ".join(reasons)
+
 
 # =========================================================
 # 9. API ENDPOINT (SUBMISSION ENDPOINT)
