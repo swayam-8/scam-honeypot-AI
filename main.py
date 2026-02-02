@@ -260,8 +260,10 @@ async def honey_pot(request: Request, background: BackgroundTasks):
         body = {}
 
     # AUTH
-    if request.headers.get("x-api-key") != SECRET_API_KEY:
-        return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
+    api_key = request.headers.get("x-api-key") or request.headers.get("X-Api-Key")
+    if api_key != SECRET_API_KEY:
+     return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
+
 
     message = body.get("message", {})
     session_id = body.get("sessionId", "test_session")
