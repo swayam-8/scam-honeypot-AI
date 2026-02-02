@@ -185,7 +185,7 @@ def generate_reply(history, user_text, victim_name):
     )
 
     # GROQ
-    if groq_pool:
+    if groq_pool is not None:
         try:
             client = next(groq_pool)
             messages = [{"role": "system", "content": system_prompt}]
@@ -255,7 +255,8 @@ async def honey_pot(request: Request, background: BackgroundTasks):
         body = json.loads(raw_body)
         if not isinstance(body, dict):
             body = {}
-    except:
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning(f"Invalid JSON in request body: {e}")
         body = {}
 
     # AUTH
@@ -279,7 +280,7 @@ async def honey_pot(request: Request, background: BackgroundTasks):
         history = []
 
     combined_text = user_text + " " + " ".join(
-        h.get("text", "") for h in history if isinstance(h, dict)
+        str(h.get("text", "")) for h in history if isinstance(h, dict) and h.get("text")
     )
 
     intel = extract_intel(combined_text)
