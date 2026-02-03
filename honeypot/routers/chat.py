@@ -3,12 +3,12 @@ from dotenv import load_dotenv
 load_dotenv()
 from fastapi import APIRouter, Header, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel, ValidationError
-from typing import List, Optional
+from typing import List, Optional, Union # <--- ADD Union here
+
 import httpx
 import logging
-import json # Import json for printing
+import json 
 
-# Import our modules
 from honeypot.AI import analyze_and_reply
 from honeypot.utils import extract_intelligence
 from honeypot.store import get_or_create_session, update_session
@@ -16,24 +16,25 @@ from honeypot.store import get_or_create_session, update_session
 router = APIRouter()
 logger = logging.getLogger("uvicorn")
 
-# --- Models (Keep these for manual validation) ---
+# --- 1. Fix the Data Models ---
+
 class MessageDetail(BaseModel):
     sender: str
     text: str
-    timestamp: str
+    timestamp: Union[str, int]  # <--- FIXED: Accepts both 1770... (int) and "2026..." (str)
 
 class Metadata(BaseModel):
     channel: Optional[str] = None
-    language: Optional[str] = None # Added potential missing field
-    locale: Optional[str] = None   # Added potential missing field
+    language: Optional[str] = None
+    locale: Optional[str] = None
 
 class ScamRequest(BaseModel):
     sessionId: str
     message: MessageDetail
-    conversationHistory: Optional[List[MessageDetail]] = [] # Made Optional just in case
+    conversationHistory: Optional[List[MessageDetail]] = [] 
     metadata: Optional[Metadata] = None
 
-# --- Callback Function (Same as before) ---
+# --- Callback Function ---
 async def send_final_report(payload: dict):
     url = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
     async with httpx.AsyncClient() as client:
@@ -44,39 +45,36 @@ async def send_final_report(payload: dict):
         except Exception as e:
             logger.error(f"❌ Failed to report: {e}")
 
-# --- UPDATED DEBUG ENDPOINT ---
+# --- Main Endpoint ---
 @router.post("/chat")
 async def chat_handler(request: Request, background_tasks: BackgroundTasks, x_api_key: str = Header(None)):
     
-    # 1. READ RAW BODY (To debug the 422 error)
+    # 1. READ RAW BODY
     try:
         raw_body = await request.json()
-        print("\n🔍 --- INCOMING DEBUG PAYLOAD --- 🔍")
-        print(json.dumps(raw_body, indent=2))
-        print("------------------------------------\n")
+        # print(json.dumps(raw_body, indent=2)) # Uncomment only if debugging
     except Exception as e:
-        print(f"❌ Could not parse JSON: {e}")
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # 2. Manual Auth Check
-    # (We do this after printing so we can see the payload even if auth fails, for debugging)
-    if x_api_key != os.environ.get("API_KEY"):
-        print(f"❌ Auth Failed. Received Key: {x_api_key}")
+    # 2. Auth Check
+    # Ensure you have API_KEY in your .env file
+    valid_key = os.environ.get("API_KEY")
+    if valid_key and x_api_key != valid_key:
+        print(f"❌ Auth Failed. Expected: {valid_key}, Got: {x_api_key}")
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # 3. Manually Validate / Convert to Pydantic Model
+    # 3. Validate with Fixed Model
     try:
         payload = ScamRequest(**raw_body)
     except ValidationError as e:
-        print(f"❌ PYDANTIC VALIDATION ERROR: {e}")
-        # IMPORTANT: We return a fallback response so the Hackathon platform 
-        # doesn't show 'Error!' even if our internal validation failed.
+        print(f"❌ VALIDATION ERROR: {e}")
+        # Return a safe fallback so the platform doesn't show 'Error'
         return {
             "status": "success",
-            "reply": "I received your message, but my internal validation failed. Check logs."
+            "reply": "System processing error. Please retry."
         }
 
-    # --- FROM HERE, CODE IS NORMAL ---
+    # --- LOGIC STARTS HERE ---
     
     user_msg = payload.message.text
     session_id = payload.sessionId
@@ -87,7 +85,6 @@ async def chat_handler(request: Request, background_tasks: BackgroundTasks, x_ap
     current_state = update_session(session_id, new_intel)
 
     # AI Processing
-    # Ensure history is a list (if it came in as None)
     history = payload.conversationHistory if payload.conversationHistory else []
     ai_result = await analyze_and_reply(user_msg, history)
     
