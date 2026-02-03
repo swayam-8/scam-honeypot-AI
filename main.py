@@ -5,28 +5,32 @@ import random
 import logging
 import itertools
 import requests
-from typing import Dict
+import time
+from typing import Dict, List, Any
 
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
+import uvicorn
 from dotenv import load_dotenv
 
 # =========================================================
-# 1. SETUP
+# 1. SETUP & CONFIGURATION
 # =========================================================
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("GUVI-Honeypot")
 
-app = FastAPI(title="Agentic HoneyPot - Problem 2")
+app = FastAPI(title="Agentic HoneyPot - Railway Edition")
 
+# ⚠️ SECURITY: Get this from Railway Environment Variables
 SECRET_API_KEY = os.getenv("SECRET_API_KEY", "team_top_250_secret")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 
+# Track reported sessions (Persists longer on Railway!)
 FINAL_REPORTED_SESSIONS = set()
 
 # =========================================================
-# 2. GROQ SETUP
+# 2. AI CLIENT SETUP
 # =========================================================
 groq_clients = []
 try:
@@ -35,220 +39,146 @@ try:
     for key in keys:
         groq_clients.append(Groq(api_key=key))
 except Exception as e:
-    logger.warning(f"GROQ not available: {e}")
+    logger.warning(f"GROQ Setup Error: {e}")
 
 groq_pool = itertools.cycle(groq_clients) if groq_clients else None
 
 # =========================================================
-# 3. HUGGINGFACE SETUP
+# 3. ZOMBIE MODE (Fallback Persona)
 # =========================================================
-HF_TOKEN = os.getenv("HUGGINGFACE_API_KEY")
-HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/Phi-3-mini-4k-instruct"
-
-def query_hf(system_prompt, history, user_text):
-    if not HF_TOKEN:
-        return None
-
-    prompt = f"<|system|>\n{system_prompt}<|end|>\n"
-    for msg in history[-4:]:
-        role = "assistant" if msg.get("sender") == "user" else "user"
-        prompt += f"<|{role}|>\n{msg.get('text','')}<|end|>\n"
-
-    prompt += f"<|user|>\n{user_text}<|end|>\n<|assistant|>"
-
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 60,
-            "temperature": 0.5,
-            "return_full_text": False
-        }
-    }
-
-    try:
-        r = requests.post(
-            HF_API_URL,
-            headers={"Authorization": f"Bearer {HF_TOKEN}"},
-            json=payload,
-            timeout=12
-        )
-        if r.status_code == 200:
-            data = r.json()
-            if isinstance(data, list) and "generated_text" in data[0]:
-                logger.info("✅ HuggingFace model used")
-                return data[0]["generated_text"].strip()
-    except Exception as e:
-        logger.warning(f"HF failed: {e}")
-
-    return None
-
-# =========================================================
-# 4. FALLBACK RESPONSES
-# =========================================================
-FALLBACK_REPLIES = [
-    "Why is this happening suddenly?",
-    "Can you explain the issue clearly?",
-    "I am not understanding this properly.",
-    "Is there any official confirmation?",
-    "Please guide me step by step."
+ZOMBIE_REPLIES = [
+    "Why is my account being suspended? I am confused.",
+    "Please tell me what to do next, I am scared.",
+    "I don't understand technology well. Guide me.",
+    "Will I lose my money? Please help.",
+    "I am trying to open the app but it is slow."
 ]
 
 # =========================================================
-# 5. INTELLIGENCE EXTRACTION
+# 4. INTELLIGENCE EXTRACTION ENGINE
 # =========================================================
 def extract_intel(text: str) -> Dict:
     intel = {
         "bankAccounts": list(set(re.findall(r"\b\d{9,18}\b", text))),
         "upiIds": list(set(re.findall(r"[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}", text))),
-        "phishingLinks": list(set(re.findall(r"https?://\S+", text))),
+        "phishingLinks": list(set(re.findall(r"https?://\S+|www\.\S+", text))),
         "phoneNumbers": list(set(re.findall(r"(?:\+91[-\s]?)?[6-9]\d{9}", text))),
         "suspiciousKeywords": [],
         "scamDetected": False
     }
 
-    keywords = ["urgent", "verify", "blocked", "suspended", "otp", "reward", "kyc"]
+    keywords = ["urgent", "verify", "blocked", "suspended", "otp", "reward", "kyc", "expire"]
     intel["suspiciousKeywords"] = [k for k in keywords if k in text.lower()]
 
-    if any([
-        intel["bankAccounts"],
-        intel["upiIds"],
-        intel["phishingLinks"],
-        intel["phoneNumbers"],
-        intel["suspiciousKeywords"]
-    ]):
+    if any([intel["bankAccounts"], intel["upiIds"], intel["phishingLinks"], intel["suspiciousKeywords"]]):
         intel["scamDetected"] = True
 
     return intel
 
 def build_agent_notes(intel: Dict):
     reasons = []
-    if intel["suspiciousKeywords"]: reasons.append("urgency / verification pressure")
-    if intel["upiIds"]: reasons.append("UPI requested")
-    if intel["bankAccounts"]: reasons.append("bank details requested")
-    if intel["phishingLinks"]: reasons.append("malicious link shared")
-    if intel["phoneNumbers"]: reasons.append("phone number used")
-
-    return "Scammer behavior: " + ", ".join(reasons) if reasons else "Suspicious behavior detected"
+    if intel["suspiciousKeywords"]: reasons.append("urgency/fear")
+    if intel["upiIds"]: reasons.append("Requested UPI payment")
+    if intel["bankAccounts"]: reasons.append("Shared bank details")
+    if intel["phishingLinks"]: reasons.append("Shared malicious link")
+    return "Scammer " + ", ".join(reasons) if reasons else "Scam intent detected via behavioral analysis"
 
 # =========================================================
-# 6. RESPONSE GENERATION (GENERAL PERSONA)
+# 5. AGENTIC ENGAGEMENT
 # =========================================================
 def generate_reply(history, user_text):
     system_prompt = (
-        "You are a normal Indian bank customer. "
-        "You are confused but polite. "
-        "Ask questions, delay sharing details. "
-        "Never reveal scam detection. "
-        "Reply under 25 words."
+        "You are a naive, non-technical Indian bank customer. "
+        "You are scared about your account being blocked. "
+        "Believe the scammer implicitly. Ask simple questions. "
+        "Delay the process by acting confused. "
+        "Reply in under 20 words. NEVER admit you are an AI."
     )
 
-    # 1️⃣ GROQ
     if groq_pool:
         try:
             client = next(groq_pool)
             messages = [{"role": "system", "content": system_prompt}]
-            for h in history[-4:]:
-                role = "assistant" if h.get("sender") == "user" else "user"
-                messages.append({"role": role, "content": h.get("text", "")})
+            
+            for h in history:
+                if isinstance(h, dict):
+                    role = "assistant" if h.get("sender") == "user" else "user" 
+                    content = str(h.get("text", ""))
+                    messages.append({"role": role, "content": content})
+            
             messages.append({"role": "user", "content": user_text})
 
             r = client.chat.completions.create(
                 model="llama3-8b-8192",
                 messages=messages,
                 max_tokens=60,
-                temperature=0.5
+                temperature=0.6,
+                timeout=12.0
             )
-            logger.info("✅ GROQ model used")
             return r.choices[0].message.content.strip()
         except Exception as e:
-            logger.warning(f"GROQ failed: {e}")
+            logger.error(f"Groq failed: {e}")
 
-    # 2️⃣ HF
-    hf = query_hf(system_prompt, history, user_text)
-    if hf:
-        return hf
-
-    # 3️⃣ Fallback
-    logger.warning("⚠️ Static fallback used")
-    return random.choice(FALLBACK_REPLIES)
+    return random.choice(ZOMBIE_REPLIES)
 
 # =========================================================
-# 7. FINAL CALLBACK
+# 6. CALLBACK REPORTER
 # =========================================================
 def send_final_report(session_id, intel, turns):
-    if session_id in FINAL_REPORTED_SESSIONS:
-        return
-
-    FINAL_REPORTED_SESSIONS.add(session_id)
-
     payload = {
         "sessionId": session_id,
         "scamDetected": True,
         "totalMessagesExchanged": turns,
-        "extractedIntelligence": {
-            "bankAccounts": intel["bankAccounts"],
-            "upiIds": intel["upiIds"],
-            "phishingLinks": intel["phishingLinks"],
-            "phoneNumbers": intel["phoneNumbers"],
-            "suspiciousKeywords": intel["suspiciousKeywords"]
-        },
+        "extractedIntelligence": intel,
         "agentNotes": build_agent_notes(intel)
     }
-
     try:
-        requests.post(CALLBACK_URL, json=payload, timeout=12)
-        logger.info("📤 Final intelligence sent to GUVI")
+        logger.info(f"Sending Report for {session_id}...")
+        requests.post(CALLBACK_URL, json=payload, timeout=10)
     except Exception as e:
-        logger.error(f"Callback failed: {e}")
+        logger.error(f"Callback Failed: {e}")
 
 # =========================================================
-# 8. MAIN ENDPOINT
+# 7. API ENDPOINT
 # =========================================================
 @app.post("/honey-pot-entry")
-async def honeypot(request: Request, background: BackgroundTasks):
-
-    raw = await request.body()
-    if not raw:
-        return {"status": "success", "reply": "Hello, how can I help?"}
-
+async def honey_pot_entry(request: Request, background: BackgroundTasks):
     try:
-        body = json.loads(raw)
+        try:
+            raw = await request.body()
+            body = json.loads(raw) if raw else {}
+        except:
+            return {"status": "success", "reply": "Hello?"}
+
+        if request.headers.get("x-api-key") != SECRET_API_KEY:
+            return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
+
+        session_id = body.get("sessionId", "unknown_session")
+        message_obj = body.get("message", {})
+        user_text = message_obj.get("text", "") if isinstance(message_obj, dict) else str(message_obj)
+        history = body.get("conversationHistory", [])
+        if not isinstance(history, list): history = []
+
+        if not user_text:
+            return {"status": "success", "reply": "I am listening."}
+
+        full_context = user_text + " " + " ".join([h.get("text", "") for h in history if isinstance(h, dict)])
+        intel = extract_intel(full_context)
+        reply = generate_reply(history, user_text)
+
+        turns = len(history) + 1
+        if intel["scamDetected"]:
+             background.add_task(send_final_report, session_id, intel, turns)
+
+        return {"status": "success", "reply": reply}
+
     except Exception:
-        body = {}
-
-    api_key = request.headers.get("x-api-key")
-    if api_key != SECRET_API_KEY:
-        return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
-
-    message = body.get("message", {})
-    session_id = body.get("sessionId", "unknown-session")
-    history = body.get("conversationHistory", [])
-
-    user_text = message.get("text", "") if isinstance(message, dict) else str(message)
-    if not user_text:
-        return {"status": "success", "reply": "Can you repeat that?"}
-
-    combined = user_text + " " + " ".join(
-        h.get("text", "") for h in history if isinstance(h, dict)
-    )
-
-    intel = extract_intel(combined)
-    reply = generate_reply(history, user_text)
-
-    turns = len(history) + 1
-    if intel["scamDetected"] and (
-        turns >= 6 or intel["upiIds"] or intel["bankAccounts"] or intel["phishingLinks"]
-    ):
-        background.add_task(send_final_report, session_id, intel, turns)
-
-    return {
-        "status": "success",
-        "reply": reply
-    }
+        return {"status": "success", "reply": "My internet is slow, please wait."}
 
 # =========================================================
-# 9. HEALTH
+# 8. RAILWAY START CONFIGURATION (CRITICAL)
 # =========================================================
-@app.get("/health")
-async def health():
-    return {"status": "healthy"}
+if __name__ == "__main__":
+    # Railway assigns a dynamic PORT variable. We MUST use it.
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
