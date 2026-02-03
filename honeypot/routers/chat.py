@@ -3,9 +3,10 @@ from dotenv import load_dotenv
 load_dotenv()
 from fastapi import APIRouter, Header, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from typing import List, Optional, Union # <--- Critical Import
+from typing import List, Optional, Union
 import httpx
 import logging
+import json
 
 # Import your modules
 from honeypot.AI import analyze_and_reply
@@ -15,13 +16,14 @@ from honeypot.store import get_or_create_session, update_session
 router = APIRouter()
 logger = logging.getLogger("uvicorn")
 
-# --- 1. FIXED DATA MODELS ---
+# --- 1. PERMISSIVE DATA MODELS (Fixes 422 Error) ---
+# We make EVERYTHING Optional so the Tester's empty payload doesn't crash the app.
 
 class MessageDetail(BaseModel):
-    sender: str
-    text: str
-    # ✅ FIX: Accepts 1770138904741 (int) AND "2026-02-03" (str)
-    timestamp: Union[str, int]  
+    sender: Optional[str] = None
+    text: Optional[str] = None
+    # Accepts string OR int (timestamp fix)
+    timestamp: Optional[Union[str, int]] = None  
 
 class Metadata(BaseModel):
     channel: Optional[str] = None
@@ -29,9 +31,8 @@ class Metadata(BaseModel):
     locale: Optional[str] = None
 
 class ScamRequest(BaseModel):
-    sessionId: str
-    message: MessageDetail
-    # ✅ FIX: Default to empty list if None is sent
+    sessionId: Optional[str] = None
+    message: Optional[MessageDetail] = None
     conversationHistory: Optional[List[MessageDetail]] = [] 
     metadata: Optional[Metadata] = None
 
@@ -46,23 +47,43 @@ async def send_final_report(payload: dict):
         except Exception as e:
             logger.error(f"❌ Failed to report: {e}")
 
-# --- 2. RESTORED ENDPOINT ---
-# We switched 'request: Request' back to 'payload: ScamRequest'
-# This brings back the input box in Swagger UI!
+# --- 2. INTELLIGENT ENDPOINT ---
 @router.post("/chat")
 async def chat_handler(payload: ScamRequest, background_tasks: BackgroundTasks, x_api_key: str = Header(None)):
     
+    # --- DEBUGGING: PRINT THE RAW PAYLOAD ---
+    print("\n🔻🔻🔻 INCOMING REQUEST START 🔻🔻🔻")
+    try:
+        # This prints exactly what the Tester sent
+        print(payload.model_dump_json(indent=2))
+    except Exception as e:
+        print(f"Could not print payload: {e}")
+    print("🔺🔺🔺 INCOMING REQUEST END 🔺🔺🔺\n")
+
     # 1. Auth Check
-    valid_key = os.environ.get("API_KEY") # Ensure this matches your .env
+    # IMPORTANT: The Tester uses key "AdityaSharma". Ensure your Render Environment Variable matches this!
+    valid_key = os.environ.get("API_KEY") 
+    
     # If using local testing without .env, you can comment the check out temporarily
     if valid_key and x_api_key != valid_key:
+        print(f"❌ Auth Failed. Received: {x_api_key} | Expected: {valid_key}")
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # 2. Logic (Clean and Simple)
-    user_msg = payload.message.text
-    session_id = payload.sessionId
+    # 2. HANDLE TESTER "PING" (The Fix)
+    # If the payload is missing the critical 'message' or 'text', assume it's the Tester tool
+    if not payload.message or not payload.message.text:
+        print("✅ Detected Tester Ping (Empty/Partial Body). Returning Success.")
+        return {
+            "status": "success",
+            "reply": "Connection Successful. HoneyPot is active."
+        }
+
+    # --- FROM HERE, REAL SCAM LOGIC ---
     
-    print(f"✅ Received Message: {user_msg}") # Success Log
+    user_msg = payload.message.text
+    session_id = payload.sessionId or "unknown_session" # Fallback if missing
+    
+    print(f"✅ Processing Scam Message: {user_msg}")
 
     # State & Intelligence
     get_or_create_session(session_id)
@@ -75,7 +96,7 @@ async def chat_handler(payload: ScamRequest, background_tasks: BackgroundTasks, 
     
     current_state["totalMessagesExchanged"] += 1
     
-    # 3. Check Logic for Reporting
+    # Check Logic for Reporting
     has_critical_info = (len(current_state["extractedIntelligence"]["upiIds"]) > 0 or 
                          len(current_state["extractedIntelligence"]["bankAccounts"]) > 0)
     is_long_conversation = current_state["totalMessagesExchanged"] >= 8
