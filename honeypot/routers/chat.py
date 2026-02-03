@@ -1,14 +1,13 @@
 import os 
 from dotenv import load_dotenv
 load_dotenv()
-from fastapi import APIRouter, Header, HTTPException, BackgroundTasks, Request
-from pydantic import BaseModel, ValidationError
-from typing import List, Optional, Union # <--- ADD Union here
-
+from fastapi import APIRouter, Header, HTTPException, BackgroundTasks
+from pydantic import BaseModel
+from typing import List, Optional, Union # <--- Critical Import
 import httpx
 import logging
-import json 
 
+# Import your modules
 from honeypot.AI import analyze_and_reply
 from honeypot.utils import extract_intelligence
 from honeypot.store import get_or_create_session, update_session
@@ -16,12 +15,13 @@ from honeypot.store import get_or_create_session, update_session
 router = APIRouter()
 logger = logging.getLogger("uvicorn")
 
-# --- 1. Fix the Data Models ---
+# --- 1. FIXED DATA MODELS ---
 
 class MessageDetail(BaseModel):
     sender: str
     text: str
-    timestamp: Union[str, int]  # <--- FIXED: Accepts both 1770... (int) and "2026..." (str)
+    # ✅ FIX: Accepts 1770138904741 (int) AND "2026-02-03" (str)
+    timestamp: Union[str, int]  
 
 class Metadata(BaseModel):
     channel: Optional[str] = None
@@ -31,6 +31,7 @@ class Metadata(BaseModel):
 class ScamRequest(BaseModel):
     sessionId: str
     message: MessageDetail
+    # ✅ FIX: Default to empty list if None is sent
     conversationHistory: Optional[List[MessageDetail]] = [] 
     metadata: Optional[Metadata] = None
 
@@ -45,40 +46,24 @@ async def send_final_report(payload: dict):
         except Exception as e:
             logger.error(f"❌ Failed to report: {e}")
 
-# --- Main Endpoint ---
+# --- 2. RESTORED ENDPOINT ---
+# We switched 'request: Request' back to 'payload: ScamRequest'
+# This brings back the input box in Swagger UI!
 @router.post("/chat")
-async def chat_handler(request: Request, background_tasks: BackgroundTasks, x_api_key: str = Header(None)):
+async def chat_handler(payload: ScamRequest, background_tasks: BackgroundTasks, x_api_key: str = Header(None)):
     
-    # 1. READ RAW BODY
-    try:
-        raw_body = await request.json()
-        # print(json.dumps(raw_body, indent=2)) # Uncomment only if debugging
-    except Exception as e:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-
-    # 2. Auth Check
-    # Ensure you have API_KEY in your .env file
-    valid_key = os.environ.get("API_KEY")
+    # 1. Auth Check
+    valid_key = os.environ.get("API_KEY") # Ensure this matches your .env
+    # If using local testing without .env, you can comment the check out temporarily
     if valid_key and x_api_key != valid_key:
-        print(f"❌ Auth Failed. Expected: {valid_key}, Got: {x_api_key}")
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # 3. Validate with Fixed Model
-    try:
-        payload = ScamRequest(**raw_body)
-    except ValidationError as e:
-        print(f"❌ VALIDATION ERROR: {e}")
-        # Return a safe fallback so the platform doesn't show 'Error'
-        return {
-            "status": "success",
-            "reply": "System processing error. Please retry."
-        }
-
-    # --- LOGIC STARTS HERE ---
-    
+    # 2. Logic (Clean and Simple)
     user_msg = payload.message.text
     session_id = payload.sessionId
     
+    print(f"✅ Received Message: {user_msg}") # Success Log
+
     # State & Intelligence
     get_or_create_session(session_id)
     new_intel = extract_intelligence(user_msg)
@@ -90,7 +75,7 @@ async def chat_handler(request: Request, background_tasks: BackgroundTasks, x_ap
     
     current_state["totalMessagesExchanged"] += 1
     
-    # Check Logic
+    # 3. Check Logic for Reporting
     has_critical_info = (len(current_state["extractedIntelligence"]["upiIds"]) > 0 or 
                          len(current_state["extractedIntelligence"]["bankAccounts"]) > 0)
     is_long_conversation = current_state["totalMessagesExchanged"] >= 8
