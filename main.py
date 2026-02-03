@@ -29,7 +29,9 @@ FINAL_REPORTED_SESSIONS = set()
 # 2. HUGGING FACE CLIENT (20s Timeout)
 # =========================================================
 HF_TOKEN = os.getenv("HUGGINGFACE_API_KEY")
-# Using Phi-3 because it is the most reliable free model
+
+# We use Phi-3 because 120B models (like gpt-oss-120b) WILL crash the free API.
+# Phi-3 is fast, free, and smart enough for this hackathon.
 HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/Phi-3-mini-4k-instruct"
 
 def query_hf_api(system_prompt, history, user_text):
