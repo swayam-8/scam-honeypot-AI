@@ -3,7 +3,6 @@ import re
 import json
 import random
 import logging
-import itertools
 import requests
 import time
 from typing import Dict, List, Any
@@ -20,59 +19,81 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("GUVI-Honeypot")
 
-app = FastAPI(title="Agentic HoneyPot - Speed Edition")
+app = FastAPI(title="Agentic HoneyPot - HF Only (20s)")
 
 SECRET_API_KEY = os.getenv("SECRET_API_KEY", "team_top_250_secret")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 FINAL_REPORTED_SESSIONS = set()
 
 # =========================================================
-# 2. AI CLIENTS (FAST & AGGRESSIVE)
+# 2. HUGGING FACE CLIENT (20s Timeout)
 # =========================================================
-groq_clients = []
-try:
-    from groq import Groq
-    keys = [k.strip() for k in os.getenv("GROQ_KEYS", "").split(",") if k.strip() and len(k) > 10]
-    for key in keys:
-        groq_clients.append(Groq(api_key=key))
-except Exception: pass
-
-# Infinite cycle of keys
-groq_pool = itertools.cycle(groq_clients) if groq_clients else None
-
 HF_TOKEN = os.getenv("HUGGINGFACE_API_KEY")
+# Using Phi-3 because it is the most reliable free model
 HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/Phi-3-mini-4k-instruct"
 
-def query_hf(system_prompt, history, user_text):
-    if not HF_TOKEN: return None
+def query_hf_api(system_prompt, history, user_text):
+    if not HF_TOKEN:
+        logger.error("HF Token missing!")
+        return None
     
+    # Construct prompt
     prompt = f"<|system|>\n{system_prompt}<|end|>\n"
-    for msg in history[-3:]:
+    for msg in history[-3:]: 
         role = "assistant" if msg.get("sender") == "bot" else "user"
         prompt += f"<|{role}|>\n{msg.get('text','')}<|end|>\n"
     prompt += f"<|user|>\n{user_text}<|end|>\n<|assistant|>"
 
-    # Try only ONCE with a moderate timeout to save time
-    try:
-        r = requests.post(
-            HF_API_URL, headers={"Authorization": f"Bearer {HF_TOKEN}"},
-            json={"inputs": prompt, "parameters": {"max_new_tokens": 50, "return_full_text": False}},
-            timeout=8 # STRICT 8s TIMEOUT
-        )
-        if r.status_code == 200:
-            return r.json()[0]['generated_text'].strip()
-    except: pass
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": 60,
+            "return_full_text": False,
+            "temperature": 0.7
+        }
+    }
+
+    # ATTEMPT LOOP
+    # We try twice. If the first one hangs for 20s, it fails.
+    for attempt in range(2):
+        try:
+            logger.info(f"HF Request Attempt {attempt+1}...")
+            r = requests.post(
+                HF_API_URL, 
+                headers={"Authorization": f"Bearer {HF_TOKEN}"},
+                json=payload,
+                timeout=20  # <--- YOUR REQUESTED 20s TIMEOUT
+            )
+            
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list) and "generated_text" in data[0]:
+                    return data[0]['generated_text'].strip()
+            
+            # If model is loading (503), wait 5s and try again
+            elif r.status_code == 503:
+                logger.warning("Model loading... waiting 5s")
+                time.sleep(5)
+                continue
+            else:
+                logger.error(f"HF Error {r.status_code}: {r.text}")
+                
+        except Exception as e:
+            logger.warning(f"HF Timeout/Error: {e}")
+            
     return None
 
 # =========================================================
-# 3. FAKE AI (Invisible Fallback)
+# 3. FAKE AI (The "Never Fail" Safety Net)
 # =========================================================
+# If HF is completely dead, these ensure you ALWAYS reply.
 FAKE_AI_REPLIES = [
-    "I am confused. Can you explain that again?",
-    "My internet is slow. Did you say I need to verify?",
-    "I don't understand. Will I lose my money?",
-    "Please wait, I am asking my son to help me read this.",
-    "Is this really the bank? I am scared."
+    "I am confused. Why do I need to do this urgently?",
+    "My internet is very slow. Can you explain the steps again?",
+    "I am scared to lose my money. Is this really the bank manager?",
+    "Please wait, I am trying to find my glasses to read the OTP.",
+    "I don't understand technology well. Will my account really be blocked?",
+    "Can I call you? I prefer talking to someone."
 ]
 
 # =========================================================
@@ -96,39 +117,22 @@ def build_notes(intel):
     return "Scam detected via: " + ", ".join(reasons) if reasons else "Scam behavior detected"
 
 # =========================================================
-# 5. AGENTIC ENGAGEMENT (OPTIMIZED SPEED)
+# 5. AGENTIC ENGAGEMENT
 # =========================================================
 def generate_reply(history, user_text):
     system_prompt = (
         "You are a naive, scared Indian bank customer named Ramesh. "
-        "You trust the scammer. You are bad at technology. "
-        "Keep them talking. Ask questions. "
-        "Reply in under 15 words."
+        "You trust the scammer but are confused. "
+        "Keep asking questions to delay them. "
+        "Reply in under 20 words."
     )
 
-    # 1. TRY GROQ (3 attempts, 3s each = 9s MAX)
-    if groq_pool:
-        for _ in range(3):
-            try:
-                client = next(groq_pool)
-                messages = [{"role": "system", "content": system_prompt}]
-                for h in history[-3:]:
-                    role = "assistant" if h.get("sender") == "user" else "user" 
-                    messages.append({"role": role, "content": str(h.get("text", ""))})
-                messages.append({"role": "user", "content": user_text})
+    # 1. Try Hugging Face (20s Timeout)
+    reply = query_hf_api(system_prompt, history, user_text)
+    if reply:
+        return reply
 
-                # SUPER FAST TIMEOUT: If Groq doesn't answer in 3s, skip to next key
-                r = client.chat.completions.create(
-                    model="llama3-8b-8192", messages=messages, max_tokens=60, temperature=0.7, timeout=3.0
-                )
-                return r.choices[0].message.content.strip()
-            except: continue
-
-    # 2. TRY HUGGING FACE (1 attempt, 8s MAX)
-    hf_reply = query_hf(system_prompt, history, user_text)
-    if hf_reply: return hf_reply
-
-    # 3. FAKE AI (Instant Fallback)
+    # 2. Fallback to Fake AI (Guaranteed Response if HF fails)
     return random.choice(FAKE_AI_REPLIES)
 
 # =========================================================
@@ -153,13 +157,15 @@ async def entry(request: Request, background: BackgroundTasks):
     try:
         raw = await request.body()
         body = json.loads(raw) if raw else {}
+        
+        # Auth Check
         if request.headers.get("x-api-key") != SECRET_API_KEY:
             return JSONResponse(status_code=401, content={"detail": "Invalid Key"})
 
         # Extraction
         msg = body.get("message", {})
         user_text = msg.get("text", "") if isinstance(msg, dict) else str(msg)
-        sid = body.get("sessionId", "railway_session")
+        sid = body.get("sessionId", "hf_session")
         history = body.get("conversationHistory", [])
         
         if not user_text: return {"status": "success", "reply": "Hello?"}
@@ -179,8 +185,9 @@ async def entry(request: Request, background: BackgroundTasks):
         return {"status": "success", "reply": reply}
 
     except Exception:
-        return {"status": "success", "reply": "I am trying to find the button. Where is it?"}
+        return {"status": "success", "reply": "I am trying to follow your instructions, please wait."}
 
+# RAILWAY PORT CONFIG
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
