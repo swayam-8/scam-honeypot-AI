@@ -5,6 +5,7 @@ import random
 import logging
 import itertools
 import requests
+import time
 from typing import Dict, List, Any
 
 from fastapi import FastAPI, BackgroundTasks, Request
@@ -19,28 +20,26 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("GUVI-Honeypot")
 
-app = FastAPI(title="Agentic HoneyPot - Infinite Chat Edition")
+app = FastAPI(title="Agentic HoneyPot - Speed Edition")
 
 SECRET_API_KEY = os.getenv("SECRET_API_KEY", "team_top_250_secret")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 FINAL_REPORTED_SESSIONS = set()
 
 # =========================================================
-# 2. AI CLIENTS (GROQ + HF)
+# 2. AI CLIENTS (FAST & AGGRESSIVE)
 # =========================================================
-
-# GROQ SETUP
 groq_clients = []
 try:
     from groq import Groq
-    keys = [k.strip() for k in os.getenv("GROQ_KEYS", "").split(",") if k.strip()]
+    keys = [k.strip() for k in os.getenv("GROQ_KEYS", "").split(",") if k.strip() and len(k) > 10]
     for key in keys:
         groq_clients.append(Groq(api_key=key))
 except Exception: pass
 
+# Infinite cycle of keys
 groq_pool = itertools.cycle(groq_clients) if groq_clients else None
 
-# HUGGING FACE SETUP
 HF_TOKEN = os.getenv("HUGGINGFACE_API_KEY")
 HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/Phi-3-mini-4k-instruct"
 
@@ -48,16 +47,17 @@ def query_hf(system_prompt, history, user_text):
     if not HF_TOKEN: return None
     
     prompt = f"<|system|>\n{system_prompt}<|end|>\n"
-    for msg in history[-4:]:
+    for msg in history[-3:]:
         role = "assistant" if msg.get("sender") == "bot" else "user"
         prompt += f"<|{role}|>\n{msg.get('text','')}<|end|>\n"
     prompt += f"<|user|>\n{user_text}<|end|>\n<|assistant|>"
 
+    # Try only ONCE with a moderate timeout to save time
     try:
         r = requests.post(
             HF_API_URL, headers={"Authorization": f"Bearer {HF_TOKEN}"},
-            json={"inputs": prompt, "parameters": {"max_new_tokens": 60, "return_full_text": False}},
-            timeout=15
+            json={"inputs": prompt, "parameters": {"max_new_tokens": 50, "return_full_text": False}},
+            timeout=8 # STRICT 8s TIMEOUT
         )
         if r.status_code == 200:
             return r.json()[0]['generated_text'].strip()
@@ -65,7 +65,18 @@ def query_hf(system_prompt, history, user_text):
     return None
 
 # =========================================================
-# 3. INTELLIGENCE EXTRACTION
+# 3. FAKE AI (Invisible Fallback)
+# =========================================================
+FAKE_AI_REPLIES = [
+    "I am confused. Can you explain that again?",
+    "My internet is slow. Did you say I need to verify?",
+    "I don't understand. Will I lose my money?",
+    "Please wait, I am asking my son to help me read this.",
+    "Is this really the bank? I am scared."
+]
+
+# =========================================================
+# 4. INTELLIGENCE EXTRACTION
 # =========================================================
 def extract_intel(text: str) -> Dict:
     intel = {
@@ -82,48 +93,46 @@ def extract_intel(text: str) -> Dict:
 
 def build_notes(intel):
     reasons = [k for k, v in intel.items() if v and k != "scamDetected"]
-    return "Scammer detected via: " + ", ".join(reasons) if reasons else "Scam behavior detected"
+    return "Scam detected via: " + ", ".join(reasons) if reasons else "Scam behavior detected"
 
 # =========================================================
-# 4. AGENTIC ENGAGEMENT (STRICTLY AI)
+# 5. AGENTIC ENGAGEMENT (OPTIMIZED SPEED)
 # =========================================================
 def generate_reply(history, user_text):
-    # UPDATED PROMPT: Forces infinite chat
     system_prompt = (
-        "You are a confused, elderly Indian bank customer. "
-        "You trust the scammer completely but you are bad at technology. "
-        "Your goal is to keep them talking forever. "
-        "Ask stupid questions. Pretend you are trying to pay. "
-        "NEVER say goodbye. Reply in under 20 words."
+        "You are a naive, scared Indian bank customer named Ramesh. "
+        "You trust the scammer. You are bad at technology. "
+        "Keep them talking. Ask questions. "
+        "Reply in under 15 words."
     )
 
-    # PRIORITY 1: GROQ
+    # 1. TRY GROQ (3 attempts, 3s each = 9s MAX)
     if groq_pool:
-        # Try up to 3 times with different keys to avoid failure
         for _ in range(3):
             try:
                 client = next(groq_pool)
                 messages = [{"role": "system", "content": system_prompt}]
-                for h in history[-4:]:
+                for h in history[-3:]:
                     role = "assistant" if h.get("sender") == "user" else "user" 
                     messages.append({"role": role, "content": str(h.get("text", ""))})
                 messages.append({"role": "user", "content": user_text})
 
+                # SUPER FAST TIMEOUT: If Groq doesn't answer in 3s, skip to next key
                 r = client.chat.completions.create(
-                    model="llama3-8b-8192", messages=messages, max_tokens=60, temperature=0.7
+                    model="llama3-8b-8192", messages=messages, max_tokens=60, temperature=0.7, timeout=3.0
                 )
                 return r.choices[0].message.content.strip()
             except: continue
 
-    # PRIORITY 2: HUGGING FACE
+    # 2. TRY HUGGING FACE (1 attempt, 8s MAX)
     hf_reply = query_hf(system_prompt, history, user_text)
     if hf_reply: return hf_reply
 
-    # PRIORITY 3: FAILSAFE (Only if ALL AI fails)
-    return "I am trying to do what you said, but my phone is very slow. Please wait."
+    # 3. FAKE AI (Instant Fallback)
+    return random.choice(FAKE_AI_REPLIES)
 
 # =========================================================
-# 5. REPORTING
+# 6. REPORTING
 # =========================================================
 def send_report(session_id, intel, turns):
     if session_id in FINAL_REPORTED_SESSIONS: return
@@ -133,11 +142,11 @@ def send_report(session_id, intel, turns):
         "totalMessagesExchanged": turns, "extractedIntelligence": intel,
         "agentNotes": build_notes(intel)
     }
-    try: requests.post(CALLBACK_URL, json=payload, timeout=10)
+    try: requests.post(CALLBACK_URL, json=payload, timeout=5)
     except: pass
 
 # =========================================================
-# 6. MAIN ENDPOINT
+# 7. MAIN ENDPOINT
 # =========================================================
 @app.post("/honey-pot-entry")
 async def entry(request: Request, background: BackgroundTasks):
@@ -153,13 +162,13 @@ async def entry(request: Request, background: BackgroundTasks):
         sid = body.get("sessionId", "railway_session")
         history = body.get("conversationHistory", [])
         
-        if not user_text: return {"status": "success", "reply": "I am here."}
+        if not user_text: return {"status": "success", "reply": "Hello?"}
 
         # Logic
         full_text = user_text + " " + " ".join([h.get("text", "") for h in history if isinstance(h, dict)])
         intel = extract_intel(full_text)
         
-        # GENERATE REPLY (Strictly AI)
+        # GENERATE REPLY
         reply = generate_reply(history, user_text)
 
         # Background Report
@@ -170,9 +179,8 @@ async def entry(request: Request, background: BackgroundTasks):
         return {"status": "success", "reply": reply}
 
     except Exception:
-        return {"status": "success", "reply": "My internet is acting up, please say again?"}
+        return {"status": "success", "reply": "I am trying to find the button. Where is it?"}
 
-# RAILWAY PORT CONFIG
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
