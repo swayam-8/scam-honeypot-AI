@@ -4,13 +4,15 @@ import json
 import random
 import logging
 import requests
-import time
 from typing import Dict, List, Any
 
 from fastapi import FastAPI, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 import uvicorn
 from dotenv import load_dotenv
+
+# NEW IMPORT FOR YOUR SPECIFIC CODE
+from openai import OpenAI
 
 # =========================================================
 # 1. CONFIGURATION
@@ -19,76 +21,32 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("GUVI-Honeypot")
 
-app = FastAPI(title="Agentic HoneyPot - HF Only (20s)")
+app = FastAPI(title="Agentic HoneyPot - GPT-OSS Edition")
 
 SECRET_API_KEY = os.getenv("SECRET_API_KEY", "team_top_250_secret")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 FINAL_REPORTED_SESSIONS = set()
 
 # =========================================================
-# 2. HUGGING FACE CLIENT (20s Timeout)
+# 2. OPENAI CLIENT SETUP (USING YOUR EXACT CODE)
 # =========================================================
 HF_TOKEN = os.getenv("HUGGINGFACE_API_KEY")
 
-# We use Phi-3 because 120B models (like gpt-oss-120b) WILL crash the free API.
-# Phi-3 is fast, free, and smart enough for this hackathon.
-HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/Phi-3-mini-4k-instruct"
-
-def query_hf_api(system_prompt, history, user_text):
-    if not HF_TOKEN:
-        logger.error("HF Token missing!")
-        return None
-    
-    # Construct prompt
-    prompt = f"<|system|>\n{system_prompt}<|end|>\n"
-    for msg in history[-3:]: 
-        role = "assistant" if msg.get("sender") == "bot" else "user"
-        prompt += f"<|{role}|>\n{msg.get('text','')}<|end|>\n"
-    prompt += f"<|user|>\n{user_text}<|end|>\n<|assistant|>"
-
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 60,
-            "return_full_text": False,
-            "temperature": 0.7
-        }
-    }
-
-    # ATTEMPT LOOP
-    # We try twice. If the first one hangs for 20s, it fails.
-    for attempt in range(2):
-        try:
-            logger.info(f"HF Request Attempt {attempt+1}...")
-            r = requests.post(
-                HF_API_URL, 
-                headers={"Authorization": f"Bearer {HF_TOKEN}"},
-                json=payload,
-                timeout=20  # <--- YOUR REQUESTED 20s TIMEOUT
-            )
-            
-            if r.status_code == 200:
-                data = r.json()
-                if isinstance(data, list) and "generated_text" in data[0]:
-                    return data[0]['generated_text'].strip()
-            
-            # If model is loading (503), wait 5s and try again
-            elif r.status_code == 503:
-                logger.warning("Model loading... waiting 5s")
-                time.sleep(5)
-                continue
-            else:
-                logger.error(f"HF Error {r.status_code}: {r.text}")
-                
-        except Exception as e:
-            logger.warning(f"HF Timeout/Error: {e}")
-            
-    return None
+# Initialize Client exactly as you requested
+client = None
+if HF_TOKEN:
+    try:
+        client = OpenAI(
+            base_url="https://router.huggingface.co/v1",
+            api_key=HF_TOKEN,
+        )
+        logger.info("✅ OpenAI Client for HF Router Initialized")
+    except Exception as e:
+        logger.error(f"Client Init Error: {e}")
 
 # =========================================================
-# 3. FAKE AI (The "Never Fail" Safety Net)
+# 3. FAKE AI (Fallback)
 # =========================================================
-# If HF is completely dead, these ensure you ALWAYS reply.
 FAKE_AI_REPLIES = [
     "I am confused. Why do I need to do this urgently?",
     "My internet is very slow. Can you explain the steps again?",
@@ -119,7 +77,7 @@ def build_notes(intel):
     return "Scam detected via: " + ", ".join(reasons) if reasons else "Scam behavior detected"
 
 # =========================================================
-# 5. AGENTIC ENGAGEMENT
+# 5. AGENTIC ENGAGEMENT (USING YOUR MODEL)
 # =========================================================
 def generate_reply(history, user_text):
     system_prompt = (
@@ -129,13 +87,33 @@ def generate_reply(history, user_text):
         "Reply in under 20 words."
     )
 
-    # 1. Try Hugging Face (20s Timeout)
-    reply = query_hf_api(system_prompt, history, user_text)
-    if reply:
-        return reply
+    if not client:
+        return random.choice(FAKE_AI_REPLIES)
 
-    # 2. Fallback to Fake AI (Guaranteed Response if HF fails)
-    return random.choice(FAKE_AI_REPLIES)
+    # Convert history to OpenAI format
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in history[-4:]:
+        # Map our "sender" to OpenAI "role"
+        role = "assistant" if msg.get("sender") == "bot" else "user"
+        messages.append({"role": role, "content": str(msg.get("text", ""))})
+    
+    # Add current user message
+    messages.append({"role": "user", "content": user_text})
+
+    try:
+        # YOUR EXACT MODEL CALL
+        completion = client.chat.completions.create(
+            model="openai/gpt-oss-120b:groq",
+            messages=messages,
+            max_tokens=60,
+            temperature=0.7,
+            timeout=20  # Keeping your safety timeout
+        )
+        return completion.choices[0].message.content.strip()
+
+    except Exception as e:
+        logger.error(f"Model Error: {e}")
+        return random.choice(FAKE_AI_REPLIES)
 
 # =========================================================
 # 6. REPORTING
@@ -167,7 +145,7 @@ async def entry(request: Request, background: BackgroundTasks):
         # Extraction
         msg = body.get("message", {})
         user_text = msg.get("text", "") if isinstance(msg, dict) else str(msg)
-        sid = body.get("sessionId", "hf_session")
+        sid = body.get("sessionId", "gpt_oss_session")
         history = body.get("conversationHistory", [])
         
         if not user_text: return {"status": "success", "reply": "Hello?"}
