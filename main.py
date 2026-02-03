@@ -6,6 +6,7 @@ import logging
 import itertools
 import requests
 from typing import Dict
+
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
@@ -14,6 +15,7 @@ from dotenv import load_dotenv
 # 1. SETUP & CONFIGURATION
 # =========================================================
 load_dotenv()
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("GUVI-HoneyPot")
 
@@ -22,7 +24,6 @@ app = FastAPI(title="Agentic HoneyPot - Problem 2")
 SECRET_API_KEY = os.getenv("SECRET_API_KEY", "team_top_250_secret")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 
-# In-memory deduplication (OK for hackathon)
 FINAL_REPORTED_SESSIONS = set()
 
 # =========================================================
@@ -32,7 +33,7 @@ def extract_name(text: str):
     patterns = [
         r"(?:hello|hi)\s+([A-Za-z]{3,})",
         r"(?:mr|mrs|ms)\.?\s+([A-Za-z]{3,})",
-        r"(?:account holder|name is)\s+([A-Za-z]{3,})"
+        r"(?:account holder|name is)\s+([A-Za-z]{3,})",
     ]
     for p in patterns:
         m = re.search(p, text, re.IGNORECASE)
@@ -44,8 +45,10 @@ def extract_name(text: str):
 # 3. GROQ SETUP
 # =========================================================
 groq_clients = []
+
 try:
     from groq import Groq
+
     keys = [k.strip() for k in os.getenv("GROQ_KEYS", "").split(",") if k.strip()]
     for key in keys:
         groq_clients.append(Groq(api_key=key))
@@ -76,8 +79,8 @@ def query_hf(system_prompt, history, user_text):
         "parameters": {
             "max_new_tokens": 60,
             "temperature": 0.6,
-            "return_full_text": False
-        }
+            "return_full_text": False,
+        },
     }
 
     try:
@@ -85,7 +88,7 @@ def query_hf(system_prompt, history, user_text):
             HF_API_URL,
             headers={"Authorization": f"Bearer {HF_TOKEN}"},
             json=payload,
-            timeout=5
+            timeout=5,
         )
         if r.status_code == 200:
             data = r.json()
@@ -103,25 +106,25 @@ ZOMBIE = {
     "greed": [
         "Will I really get the money today?",
         "How much reward will I receive?",
-        "Others already got this, right?"
+        "Others already got this, right?",
     ],
     "fear": [
         "Please don't block my account.",
         "I am scared, all savings are there.",
-        "I don't want legal problems."
+        "I don't want legal problems.",
     ],
     "default": [
         "I am trying, please wait.",
         "Tell me step by step.",
-        "I trust you, please help."
-    ]
+        "I trust you, please help.",
+    ],
 }
 
 ENGAGEMENT_HOOKS = [
     "What should I do now?",
     "Is this safe?",
     "Please stay with me.",
-    "What should I send first?"
+    "What should I send first?",
 ]
 
 def zombie_reply(text: str):
@@ -144,7 +147,7 @@ def extract_intel(text: str) -> Dict:
         "phishingLinks": list(set(re.findall(r"https?://\S+", text))),
         "phoneNumbers": list(set(re.findall(r"(?:\+91[-\s]?)?[6-9]\d{9}", text))),
         "suspiciousKeywords": [],
-        "scamDetected": False
+        "scamDetected": False,
     }
 
     keywords = ["urgent", "verify", "blocked", "suspended", "otp", "reward", "kyc"]
@@ -163,11 +166,17 @@ def extract_intel(text: str) -> Dict:
 
 def build_agent_notes(intel):
     reasons = []
-    if intel["suspiciousKeywords"]: reasons.append("urgency or verification keywords")
-    if intel["bankAccounts"]: reasons.append("bank account shared")
-    if intel["upiIds"]: reasons.append("UPI ID shared")
-    if intel["phishingLinks"]: reasons.append("phishing link shared")
-    if intel["phoneNumbers"]: reasons.append("phone number shared")
+    if intel["suspiciousKeywords"]:
+        reasons.append("urgency or verification keywords")
+    if intel["bankAccounts"]:
+        reasons.append("bank account shared")
+    if intel["upiIds"]:
+        reasons.append("UPI ID shared")
+    if intel["phishingLinks"]:
+        reasons.append("phishing link shared")
+    if intel["phoneNumbers"]:
+        reasons.append("phone number shared")
+
     return "Scam detected due to " + ", ".join(reasons) if reasons else "Scam detected"
 
 # =========================================================
@@ -177,14 +186,13 @@ def generate_reply(history, user_text, victim_name):
     name_part = f"Your name is {victim_name}. " if victim_name else "Your name is Ramesh. "
 
     system_prompt = (
-        name_part +
-        "You are a naive, scared and greedy Indian victim. "
-        "You believe the message and fear losing money. "
-        "Ask questions, delay actions, act confused. "
-        "Never reveal you are AI. Reply under 20 words."
+        name_part
+        + "You are a naive, scared and greedy Indian victim. "
+        + "You believe the message and fear losing money. "
+        + "Ask questions, delay actions, act confused. "
+        + "Never reveal you are AI. Reply under 20 words."
     )
 
-    # GROQ
     if groq_pool is not None:
         try:
             client = next(groq_pool)
@@ -200,18 +208,16 @@ def generate_reply(history, user_text, victim_name):
                 model="llama3-8b-8192",
                 messages=messages,
                 max_tokens=60,
-                temperature=0.6
+                temperature=0.6,
             )
             return r.choices[0].message.content.strip()
         except Exception as e:
             logger.warning(f"Groq failed: {e}")
 
-    # HF fallback
     hf = query_hf(system_prompt, history, user_text)
     if hf:
         return hf
 
-    # Zombie fallback
     return zombie_reply(user_text)
 
 # =========================================================
@@ -228,7 +234,7 @@ def send_final_report(session_id, intel, turns):
         "scamDetected": True,
         "totalMessagesExchanged": turns,
         "extractedIntelligence": intel,
-        "agentNotes": build_agent_notes(intel)
+        "agentNotes": build_agent_notes(intel),
     }
 
     try:
@@ -237,42 +243,33 @@ def send_final_report(session_id, intel, turns):
         logger.error(f"Callback failed: {e}")
 
 # =========================================================
-# 9. MAIN ENDPOINT (GUVI SAFE)
+# 9. MAIN ENDPOINT
 # =========================================================
 @app.post("/honey-pot-entry")
 async def honey_pot(request: Request, background: BackgroundTasks):
 
-    # 🔥 GUVI TESTER SENDS EMPTY BODY — HANDLE FIRST
     raw_body = await request.body()
     if not raw_body:
-        return {
-            "status": "success",
-            "reply": "Hello, I am listening."
-        }
+        return {"status": "success", "reply": "Hello, I am listening."}
 
-    # SAFE JSON PARSE
     try:
         body = json.loads(raw_body)
         if not isinstance(body, dict):
             body = {}
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.warning(f"Invalid JSON in request body: {e}")
+    except Exception:
         body = {}
 
-    # AUTH
     api_key = request.headers.get("x-api-key") or request.headers.get("X-Api-Key")
     if api_key != SECRET_API_KEY:
-     return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
-
+        return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
 
     message = body.get("message", {})
     session_id = body.get("sessionId", "test_session")
 
-    user_text = ""
     if isinstance(message, dict):
         user_text = str(message.get("text", ""))
-    elif isinstance(message, str):
-        user_text = message
+    else:
+        user_text = str(message)
 
     if not user_text:
         return {"status": "success", "reply": "Hello? I am listening."}
@@ -282,7 +279,7 @@ async def honey_pot(request: Request, background: BackgroundTasks):
         history = []
 
     combined_text = user_text + " " + " ".join(
-        str(h.get("text", "")) for h in history if isinstance(h, dict) and h.get("text")
+        str(h.get("text", "")) for h in history if isinstance(h, dict)
     )
 
     intel = extract_intel(combined_text)
