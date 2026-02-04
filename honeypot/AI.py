@@ -73,11 +73,11 @@ IMPORTANT: Always output valid JSON. No markdown, no explanations, just JSON.
 """
     
     try:
-        # Generate content with streaming for better quality
+        # Generate content with proper config format
         response = await client.aio.models.generate_content(
             model='models/gemini-2.5-flash',
             contents=system_prompt,
-            generation_config={
+            config={
                 "temperature": 0.7,
                 "max_output_tokens": 150,
             }
