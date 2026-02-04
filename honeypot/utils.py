@@ -93,7 +93,7 @@ def extract_intelligence(text: str) -> Dict[str, List[str]]:
     # Filter out numbers that are too short or phone number lookalikes
     intel["bankAccounts"] = [
         acc for acc in bank_accounts 
-        if len(acc) >= 9 and not acc.isdigit()[:10]  # Not just 10 digits
+        if len(acc) >= 9 and len(acc) != 10  # Not just 10 digits (likely phone)
     ]
 
     # 5. Suspicious Keywords (scam indicators)

@@ -153,11 +153,16 @@ async def chat_handler(
     should_report = should_send_report(session_id)
     
     if should_report and not session_state.get("report_sent", False):
+        # Ensure all data is JSON serializable
+        extracted_intel = session_state["extractedIntelligence"].copy()
+        for key in extracted_intel:
+            extracted_intel[key] = [str(item) for item in extracted_intel[key]]
+        
         final_payload = {
-            "sessionId": session_id,
+            "sessionId": str(session_id),
             "scamDetected": True,
-            "totalMessagesExchanged": session_state["totalMessagesExchanged"],
-            "extractedIntelligence": session_state["extractedIntelligence"],
+            "totalMessagesExchanged": int(session_state["totalMessagesExchanged"]),
+            "extractedIntelligence": extracted_intel,
             "agentNotes": f"Scammer engaged in {session_state['totalMessagesExchanged']} messages on {channel} ({language}). Used urgency and authority tactics."
         }
         logger.info(f"📋 Scheduling Report Send for Session: {session_id}")
