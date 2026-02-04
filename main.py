@@ -2,13 +2,12 @@ import os
 import re
 import json
 import logging
-import requests
 from typing import Optional, Dict, List
 from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-import uvicorn
+import requests
 
 load_dotenv()
 
@@ -16,9 +15,12 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-API_KEY = os.getenv("API_KEY", "default_api_key")
+# Load environment variables with defaults
+API_KEY = os.getenv("API_KEY", "default_secret_key_change_me")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 HOST = os.getenv("HOST", "0.0.0.0")
-PORT = int(os.getenv("PORT", 10000))
+PORT = int(os.getenv("PORT", 8000))
+DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
 app = FastAPI(title="Scam Honeypot AI")
 
@@ -31,13 +33,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    logger.info("🚀 Scam Honeypot AI Service Starting...")
+    logger.info(f"API Key configured: {bool(API_KEY)}")
+    logger.info(f"Debug mode: {DEBUG}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("🛑 Scam Honeypot AI Service Shutting Down...")
+
 def scam_intent_detected(text: str) -> bool:
     """Detect scam intent based on keywords."""
-    if not text:
+    if not text or not isinstance(text, str):
         return False
     scam_keywords = [
         "verify", "account blocked", "urgent", "suspend", "upi", "bank account", 
-        "phishing", "payment", "otp", "link", "confirm", "authenticate", "validate"
+        "phishing", "payment", "otp", "link", "confirm", "authenticate", "validate",
+        "compromise", "freeze", "deactivate", "expired"
     ]
     text_lower = text.lower()
     return any(kw in text_lower for kw in scam_keywords)
@@ -54,21 +67,24 @@ def extract_intelligence(messages: List[Dict]) -> Dict:
     bank_pattern = r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"
     link_pattern = r"https?://[^\s]+"
     phone_pattern = r"\+?91[\d\s]{10}|\+?1[\d\s]{10}"
-    keywords = ["urgent", "verify", "account blocked", "otp", "payment", "suspend", "confirm", "immediate"]
+    keywords = ["urgent", "verify", "account blocked", "otp", "payment", "suspend", "confirm", "immediate", "action required"]
 
     for msg in messages:
         text = msg.get("text", "")
         if not isinstance(text, str):
             continue
         
-        bank_accounts.extend(re.findall(bank_pattern, text))
-        upi_ids.extend(re.findall(upi_pattern, text))
-        phishing_links.extend(re.findall(link_pattern, text))
-        phone_numbers.extend(re.findall(phone_pattern, text))
-        
-        for kw in keywords:
-            if kw in text.lower():
-                suspicious_keywords.append(kw)
+        try:
+            bank_accounts.extend(re.findall(bank_pattern, text))
+            upi_ids.extend(re.findall(upi_pattern, text))
+            phishing_links.extend(re.findall(link_pattern, text))
+            phone_numbers.extend(re.findall(phone_pattern, text))
+            
+            for kw in keywords:
+                if kw in text.lower():
+                    suspicious_keywords.append(kw)
+        except Exception as e:
+            logger.error(f"Error extracting intelligence: {e}")
 
     return {
         "bankAccounts": list(set(bank_accounts))[:5],
@@ -80,12 +96,12 @@ def extract_intelligence(messages: List[Dict]) -> Dict:
 
 def agent_reply(message: str, history: List[Dict]) -> str:
     """Generate agent reply."""
-    if not message:
+    if not message or not isinstance(message, str):
         return "Could you please repeat that?"
     
     message_lower = message.lower()
     
-    if "account" in message_lower:
+    if "account" in message_lower and ("block" in message_lower or "suspend" in message_lower):
         return "Why is my account being suspended? Can you provide more details?"
     elif "upi" in message_lower:
         return "Can you explain why you need my UPI ID?"
@@ -95,12 +111,18 @@ def agent_reply(message: str, history: List[Dict]) -> str:
         return "Why do you need my OTP? I thought that was confidential."
     elif "link" in message_lower or "click" in message_lower:
         return "I'm hesitant to click links from unknown sources. Can you verify your identity first?"
+    elif "password" in message_lower or "pin" in message_lower:
+        return "I will never share my password or PIN with anyone."
     else:
         return "Can you provide more details about what you're saying?"
 
 def send_final_result(session_id: str, scam_detected: bool, total_messages: int, 
                       intelligence: Dict, agent_notes: str) -> bool:
     """Send final result to GUVI endpoint."""
+    if not session_id:
+        logger.error("Invalid session_id for final result")
+        return False
+    
     payload = {
         "sessionId": session_id,
         "scamDetected": scam_detected,
@@ -114,10 +136,13 @@ def send_final_result(session_id: str, scam_detected: bool, total_messages: int,
             json=payload,
             timeout=10
         )
-        logger.info(f"Final result sent: {response.status_code}")
+        logger.info(f"✅ Final result sent: {response.status_code}")
         return response.status_code == 200
-    except Exception as e:
-        logger.error(f"Error sending final result: {e}")
+    except requests.exceptions.Timeout:
+        logger.error("Timeout sending final result")
+        return False
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Error sending final result: {e}")
         return False
 
 @app.head("/")
@@ -126,7 +151,7 @@ async def head_root():
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "Scam Honeypot AI"}
+    return {"status": "ok", "service": "Scam Honeypot AI", "version": "1.0"}
 
 @app.head("/honeypot")
 async def head_honeypot():
@@ -138,7 +163,8 @@ async def honeypot_endpoint(
     x_api_key: Optional[str] = Header(None)
 ):
     """Main honeypot endpoint."""
-    if x_api_key != API_KEY:
+    if not x_api_key or x_api_key != API_KEY:
+        logger.warning(f"Invalid API key attempt: {x_api_key}")
         raise HTTPException(status_code=401, detail="Invalid or missing API Key")
 
     try:
@@ -164,9 +190,9 @@ async def honeypot_endpoint(
             "message": "Missing sessionId or message"
         })
 
-    session_id = data.get("sessionId", "")
+    session_id = str(data.get("sessionId", "")).strip()
     message = data.get("message", {})
-    conversation_history = data.get("conversationHistory", [])
+    conversation_history = data.get("conversationHistory", []) or []
 
     # Validate message structure
     if not isinstance(message, dict) or not message.get("text"):
@@ -189,6 +215,8 @@ async def honeypot_endpoint(
             "scamDetected": scam_detected
         }
 
+        logger.info(f"🔍 Session {session_id}: Scam={scam_detected}, Messages={len(all_messages)}")
+
         # Send final result if scam detected and enough engagement
         if scam_detected and len(all_messages) >= 3:
             send_final_result(
@@ -202,7 +230,7 @@ async def honeypot_endpoint(
         return JSONResponse(content=response_json, status_code=200)
 
     except Exception as e:
-        logger.error(f"Processing error: {e}")
+        logger.error(f"Processing error: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={
             "status": "error",
             "message": "Internal server error"
@@ -216,14 +244,4 @@ async def chat_endpoint(request: Request, x_api_key: Optional[str] = Header(None
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "Scam Honeypot AI"}
-
-if __name__ == "__main__":
-    logger.info(f"Starting server on {HOST}:{PORT}")
-    uvicorn.run(
-        "main:app",
-        host=HOST,
-        port=PORT,
-        reload=False,
-        log_level="info"
-    )
+    return {"status": "healthy", "service": "Scam Honeypot AI", "timestamp": __import__("time").time()}
