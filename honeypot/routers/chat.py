@@ -1,32 +1,34 @@
-import os 
+import os
+import json
+import logging
+import time
+from typing import List, Optional, Dict, Any
 from dotenv import load_dotenv
-load_dotenv()
+
 from fastapi import APIRouter, Header, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from typing import List, Optional, Union, Dict, Any
 import httpx
-import logging
-import json
 
-# Import your modules
 from honeypot.AI import analyze_and_reply
 from honeypot.utils import extract_intelligence
 from honeypot.store import (
-    get_or_create_session, 
-    update_session, 
+    get_or_create_session,
+    update_session,
     add_message_to_session,
     should_send_report,
     mark_report_sent
 )
 
+load_dotenv()
 router = APIRouter()
 logger = logging.getLogger("uvicorn")
 
-# --- DATA MODELS ---
+# ==================== DATA MODELS ====================
+
 class MessageDetail(BaseModel):
     sender: Optional[str] = None
     text: Optional[str] = None
-    timestamp: Optional[Union[str, int]] = None  
+    timestamp: Optional[int] = None
 
 class Metadata(BaseModel):
     channel: Optional[str] = None
@@ -36,145 +38,144 @@ class Metadata(BaseModel):
 class ScamRequest(BaseModel):
     sessionId: Optional[str] = None
     message: Optional[MessageDetail] = None
-    conversationHistory: Optional[List[MessageDetail]] = [] 
+    conversationHistory: Optional[List[MessageDetail]] = []
     metadata: Optional[Metadata] = None
 
-# --- Callback Function ---
-async def send_final_report(payload: dict):
+class ScamResponse(BaseModel):
+    status: str
+    reply: str
+    is_scam: Optional[bool] = None
+    confidence: Optional[float] = None
+
+# ==================== HELPER FUNCTIONS ====================
+
+async def send_final_report(payload: Dict[str, Any]):
     """
-    Sends final scam intelligence to GUVI evaluation endpoint.
-    This is mandatory for scoring.
+    Send final intelligence report to evaluation endpoint.
     """
     url = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
-    async with httpx.AsyncClient() as client:
+    
+    async with httpx.AsyncClient(timeout=10.0) as client:
         try:
-            # Ensure payload is JSON serializable
-            json_payload = json.loads(json.dumps(payload))
-            logger.info(f"🚀 Sending Final Report for Session: {json_payload['sessionId']}")
-            logger.info(f"📊 Payload: {json.dumps(json_payload, indent=2)}")
-            response = await client.post(url, json=json_payload, timeout=10.0)
-            logger.info(f"✅ Report Status: {response.status_code}")
-            logger.info(f"📝 Response: {response.text}")
+            logger.info(f"📤 Sending report for session: {payload.get('sessionId')}")
+            response = await client.post(url, json=payload)
+            logger.info(f"✅ Report sent. Status: {response.status_code}")
+            return response.status_code == 200
         except Exception as e:
-            logger.error(f"❌ Failed to send report: {e}")
+            logger.error(f"❌ Report failed: {str(e)}")
+            return False
 
-# --- 2. INTELLIGENT ENDPOINT ---
-@router.post("/chat")
+# ==================== ENDPOINTS ====================
+
+@router.post("/chat", response_model=ScamResponse)
 async def chat_handler(
-    payload: ScamRequest, 
-    background_tasks: BackgroundTasks, 
-    x_api_key: str = Header(None)
+    payload: ScamRequest,
+    background_tasks: BackgroundTasks,
+    x_api_key: Optional[str] = Header(None)
 ):
     """
-    Main endpoint for processing scam messages.
+    Main chat endpoint for processing scam messages.
     
-    Accepts incoming messages from potential scammers, detects scam intent,
-    and generates human-like responses to extract intelligence.
+    - Validates API key if configured
+    - Extracts intelligence from messages
+    - Generates AI responses
+    - Sends reports when criteria met
     """
     
-    # Debug: Print incoming request
-    logger.info(f"📥 Incoming Request: {payload.model_dump_json(indent=2)}")
-
-    # 1. Authentication Check
+    logger.info(f"📥 Incoming request: {payload}")
+    
+    # API Key validation
     valid_key = os.environ.get("API_KEY")
     if valid_key and x_api_key != valid_key:
-        logger.warning(f"❌ Auth Failed. Received: {x_api_key} | Expected: {valid_key}")
+        logger.warning(f"❌ Authentication failed")
         raise HTTPException(status_code=401, detail="Unauthorized")
-
-    # 2. Handle Empty/Ping Requests
+    
+    # Handle ping/empty requests
     if not payload.message or not payload.message.text:
-        logger.info("✅ Ping detected - HoneyPot Active")
-        return {
-            "status": "success",
-            "reply": "Connection Successful. HoneyPot is active."
-        }
-
-    # --- SCAM PROCESSING LOGIC ---
+        logger.info("✅ Ping request - HoneyPot active")
+        return ScamResponse(
+            status="success",
+            reply="HoneyPot is active and listening"
+        )
     
+    # Extract session info
     user_msg = payload.message.text.strip()
-    session_id = payload.sessionId or "unknown_session"
+    session_id = payload.sessionId or f"session_{int(time.time())}"
     channel = payload.metadata.channel if payload.metadata else "unknown"
-    language = payload.metadata.language if payload.metadata else "English"
     
-    logger.info(f"🔍 Processing Session: {session_id} | Message: {user_msg}")
-
-    # Create/Get session state
-    session_state = get_or_create_session(session_id)
+    logger.info(f"🔍 Processing message in session: {session_id}")
     
-    # Extract intelligence from current message
-    new_intel = extract_intelligence(user_msg)
+    # Get/create session
+    session = get_or_create_session(session_id)
     
-    # Update session with new intelligence
-    update_session(session_id, new_intel)
+    # Extract intelligence
+    intel = extract_intelligence(user_msg)
+    update_session(session_id, intel)
     
-    # Build conversation history for context
+    # Build conversation history
     history = []
     if payload.conversationHistory:
         history = [
             {
                 "sender": msg.sender or "unknown",
-                "text": msg.text or "",
-                "timestamp": msg.timestamp
+                "text": msg.text or ""
             }
             for msg in payload.conversationHistory
         ]
     
-    # Add current message to conversation history
+    # Add current message
     add_message_to_session(session_id, {
         "sender": "scammer",
         "text": user_msg,
-        "timestamp": payload.message.timestamp
+        "timestamp": int(time.time() * 1000)
     })
     
-    # AI Analysis & Response Generation
+    # Generate AI response
     try:
         ai_result = await analyze_and_reply(user_msg, history)
     except Exception as e:
-        logger.error(f"⚠️ AI Error: {e}")
+        logger.error(f"⚠️ AI error: {str(e)}")
         ai_result = {
             "is_scam": True,
-            "reply": "I don't understand. Can you explain?",
+            "reply": "Can you explain that again?",
             "confidence": 0.5
         }
     
-    # Update message count (only count incoming scammer messages)
-    session_state["totalMessagesExchanged"] += 1
+    # Update session
+    session["totalMessagesExchanged"] += 1
     
-    # Add AI response to conversation history
-    agent_reply = ai_result.get("reply", "I'm confused.")
+    # Add AI response to history
     add_message_to_session(session_id, {
-        "sender": "user",
-        "text": agent_reply,
-        "timestamp": int(__import__("time").time() * 1000)
+        "sender": "agent",
+        "text": ai_result.get("reply", "I don't understand"),
+        "timestamp": int(time.time() * 1000)
     })
     
-    logger.info(f"📤 AI Response: {agent_reply}")
-    logger.info(f"📊 Current State: {session_state}")
+    logger.info(f"📤 AI Response: {ai_result.get('reply')}")
     
-    # Check if we should send the final report
-    should_report = should_send_report(session_id)
-    
-    if should_report and not session_state.get("report_sent", False):
-        # Ensure all data is JSON serializable with proper structure
+    # Check if report should be sent
+    if should_send_report(session_id) and not session.get("report_sent"):
         final_payload = {
             "sessionId": str(session_id),
             "scamDetected": True,
-            "totalMessagesExchanged": int(session_state["totalMessagesExchanged"]),
+            "totalMessagesExchanged": session["totalMessagesExchanged"],
             "extractedIntelligence": {
-                "bankAccounts": [str(x) for x in session_state["extractedIntelligence"].get("bankAccounts", [])],
-                "upiIds": [str(x) for x in session_state["extractedIntelligence"].get("upiIds", [])],
-                "phishingLinks": [str(x) for x in session_state["extractedIntelligence"].get("phishingLinks", [])],
-                "phoneNumbers": [str(x) for x in session_state["extractedIntelligence"].get("phoneNumbers", [])],
-                "suspiciousKeywords": [str(x) for x in session_state["extractedIntelligence"].get("suspiciousKeywords", [])]
+                "bankAccounts": session["extractedIntelligence"].get("bankAccounts", []),
+                "upiIds": session["extractedIntelligence"].get("upiIds", []),
+                "phishingLinks": session["extractedIntelligence"].get("phishingLinks", []),
+                "phoneNumbers": session["extractedIntelligence"].get("phoneNumbers", []),
+                "suspiciousKeywords": session["extractedIntelligence"].get("suspiciousKeywords", [])
             },
-            "agentNotes": f"Scammer engaged in {int(session_state['totalMessagesExchanged'])} messages on {str(channel)} ({str(language)}). Used urgency and authority tactics."
+            "agentNotes": f"Scammer engaged in {session['totalMessagesExchanged']} messages on {channel}. Used social engineering tactics."
         }
-        logger.info(f"📋 Final Payload: {json.dumps(final_payload)}")
-        logger.info(f"📋 Scheduling Report Send for Session: {session_id}")
+        
+        logger.info(f"📋 Scheduling report for session: {session_id}")
         background_tasks.add_task(send_final_report, final_payload)
         mark_report_sent(session_id)
-
-    return {
-        "status": "success",
-        "reply": agent_reply
-    }
+    
+    return ScamResponse(
+        status="success",
+        reply=ai_result.get("reply"),
+        is_scam=ai_result.get("is_scam"),
+        confidence=ai_result.get("confidence")
+    )

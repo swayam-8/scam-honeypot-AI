@@ -1,28 +1,18 @@
-# honeypot/store.py
-"""
-Session & Conversation Storage
-
-Tracks:
-- Individual scam sessions
-- Message history for context
-- Extracted intelligence
-- Report sending status
-"""
-
+# In-memory session storage
 sessions = {}
 
 def get_or_create_session(session_id: str):
     """
-    Get or create a session for a conversation.
+    Get existing session or create new one.
     
-    Returns session state with intelligence tracking.
+    Returns session object with intelligence tracking.
     """
     if session_id not in sessions:
         sessions[session_id] = {
             "sessionId": session_id,
             "totalMessagesExchanged": 0,
             "scamDetected": True,
-            "conversationHistory": [],  # Track all messages
+            "conversationHistory": [],
             "extractedIntelligence": {
                 "bankAccounts": [],
                 "upiIds": [],
@@ -30,84 +20,71 @@ def get_or_create_session(session_id: str):
                 "phoneNumbers": [],
                 "suspiciousKeywords": []
             },
-            "report_sent": False,
-            "report_triggered": False
+            "report_sent": False
         }
     return sessions[session_id]
 
 def add_message_to_session(session_id: str, message: dict):
-    """
-    Add a message to the conversation history.
-    """
+    """Add message to conversation history."""
     session = sessions.get(session_id)
     if session:
         session["conversationHistory"].append(message)
 
-def update_session(session_id: str, new_intel: dict):
+def update_session(session_id: str, intelligence: dict):
     """
-    Update session with newly extracted intelligence.
-    
-    Merges new intelligence while avoiding duplicates.
+    Update session with extracted intelligence.
+    Merges new data while avoiding duplicates.
     """
-    session = sessions.get(session_id)
-    if not session:
-        session = get_or_create_session(session_id)
+    session = get_or_create_session(session_id)
     
-    # Merge intelligence without duplicates
-    for key, values in new_intel.items():
+    for key, values in intelligence.items():
         if key in session["extractedIntelligence"]:
-            current_list = session["extractedIntelligence"][key]
+            current = session["extractedIntelligence"][key]
             for item in values:
-                if item and item not in current_list:
-                    current_list.append(item)
-    
-    return session
+                if item and item not in current:
+                    current.append(item)
 
 def should_send_report(session_id: str) -> bool:
     """
     Determine if final report should be sent.
     
     Criteria:
-    - At least 5 scammer messages exchanged
-    - OR critical intelligence found (UPI/Bank details) + 3+ messages
-    - AND not already sent
+    - >= 5 messages exchanged OR
+    - Critical intel (UPI/bank/phone) + >= 3 messages
     """
     session = sessions.get(session_id)
     if not session or session.get("report_sent"):
         return False
     
-    # Criteria 1: Sufficient conversation depth
-    if session["totalMessagesExchanged"] >= 5:
+    msg_count = session["totalMessagesExchanged"]
+    intel = session["extractedIntelligence"]
+    
+    # Enough messages
+    if msg_count >= 5:
         return True
     
-    # Criteria 2: Critical intelligence extracted with reasonable engagement
+    # Critical data extracted
     has_critical = (
-        len(session["extractedIntelligence"].get("upiIds", [])) > 0 or
-        len(session["extractedIntelligence"].get("bankAccounts", [])) > 0 or
-        len(session["extractedIntelligence"].get("phoneNumbers", [])) > 0
+        len(intel.get("upiIds", [])) > 0 or
+        len(intel.get("bankAccounts", [])) > 0 or
+        len(intel.get("phoneNumbers", [])) > 0
     )
     
-    if has_critical and session["totalMessagesExchanged"] >= 3:
+    if has_critical and msg_count >= 3:
         return True
     
     return False
 
 def mark_report_sent(session_id: str):
-    """
-    Mark that final report has been sent for this session.
-    """
+    """Mark that report has been sent."""
     session = sessions.get(session_id)
     if session:
         session["report_sent"] = True
 
 def get_session(session_id: str):
-    """
-    Retrieve session data (for debugging/monitoring).
-    """
+    """Retrieve session data."""
     return sessions.get(session_id)
 
 def get_all_sessions():
-    """
-    Get all sessions (for monitoring/analytics).
-    """
+    """Get all sessions for monitoring."""
     return sessions
