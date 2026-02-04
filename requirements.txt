@@ -31,7 +31,7 @@ distro==1.9.0
     # via
     #   google-genai
     #   openai
-fastapi==0.128.0
+fastapi==0.104.1
     # via scam-honeypot-ai (pyproject.toml)
 google-ai-generativelanguage==0.6.15
     # via google-generativeai
@@ -54,7 +54,7 @@ google-auth-httplib2==0.3.0
     # via google-api-python-client
 google-genai==1.61.0
     # via scam-honeypot-ai (pyproject.toml)
-google-generativeai==0.8.6
+google-generativeai==0.3.0
     # via scam-honeypot-ai (pyproject.toml)
 googleapis-common-protos==1.72.0
     # via
@@ -110,7 +110,7 @@ pyasn1-modules==0.4.2
     # via google-auth
 pycparser==3.0
     # via cffi
-pydantic==2.12.5
+pydantic==2.5.0
     # via
     #   fastapi
     #   google-genai
@@ -120,9 +120,9 @@ pydantic-core==2.41.5
     # via pydantic
 pyparsing==3.3.2
     # via httplib2
-python-dotenv==1.2.1
+python-dotenv==1.0.0
     # via scam-honeypot-ai (pyproject.toml)
-requests==2.32.5
+requests==2.31.0
     # via
     #   scam-honeypot-ai (pyproject.toml)
     #   google-api-core
@@ -158,7 +158,7 @@ uritemplate==4.2.0
     # via google-api-python-client
 urllib3==2.6.3
     # via requests
-uvicorn==0.40.0
+uvicorn==0.24.0
     # via scam-honeypot-ai (pyproject.toml)
 websockets==15.0.1
     # via google-genai
