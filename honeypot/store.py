@@ -68,8 +68,8 @@ def should_send_report(session_id: str) -> bool:
     Determine if final report should be sent.
     
     Criteria:
-    - At least 4 messages exchanged
-    - OR critical intelligence found (UPI/Bank details)
+    - At least 5 scammer messages exchanged
+    - OR critical intelligence found (UPI/Bank details) + 3+ messages
     - AND not already sent
     """
     session = sessions.get(session_id)
@@ -77,17 +77,17 @@ def should_send_report(session_id: str) -> bool:
         return False
     
     # Criteria 1: Sufficient conversation depth
-    if session["totalMessagesExchanged"] >= 4:
+    if session["totalMessagesExchanged"] >= 5:
         return True
     
-    # Criteria 2: Critical intelligence extracted
+    # Criteria 2: Critical intelligence extracted with reasonable engagement
     has_critical = (
         len(session["extractedIntelligence"].get("upiIds", [])) > 0 or
         len(session["extractedIntelligence"].get("bankAccounts", [])) > 0 or
         len(session["extractedIntelligence"].get("phoneNumbers", [])) > 0
     )
     
-    if has_critical and session["totalMessagesExchanged"] >= 2:
+    if has_critical and session["totalMessagesExchanged"] >= 3:
         return True
     
     return False

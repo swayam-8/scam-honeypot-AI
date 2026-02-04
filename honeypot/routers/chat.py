@@ -135,7 +135,7 @@ async def chat_handler(
             "confidence": 0.5
         }
     
-    # Update message count
+    # Update message count (only count incoming scammer messages)
     session_state["totalMessagesExchanged"] += 1
     
     # Add AI response to conversation history
