@@ -1,8 +1,12 @@
-import os
-import logging
-from fastapi import APIRouter, Header, BackgroundTasks, Request
-from fastapi.responses import JSONResponse
+import os 
+from dotenv import load_dotenv
+load_dotenv()
+from fastapi import APIRouter, Header, HTTPException, BackgroundTasks
+from pydantic import BaseModel
+from typing import List, Optional, Union
 import httpx
+import logging
+import json
 
 # Import your modules
 from honeypot.AI import analyze_and_reply
@@ -11,6 +15,26 @@ from honeypot.store import get_or_create_session, update_session
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn")
+
+# --- 1. PERMISSIVE DATA MODELS (Fixes 422 Error) ---
+# We make EVERYTHING Optional so the Tester's empty payload doesn't crash the app.
+
+class MessageDetail(BaseModel):
+    sender: Optional[str] = None
+    text: Optional[str] = None
+    # Accepts string OR int (timestamp fix)
+    timestamp: Optional[Union[str, int]] = None  
+
+class Metadata(BaseModel):
+    channel: Optional[str] = None
+    language: Optional[str] = None
+    locale: Optional[str] = None
+
+class ScamRequest(BaseModel):
+    sessionId: Optional[str] = None
+    message: Optional[MessageDetail] = None
+    conversationHistory: Optional[List[MessageDetail]] = [] 
+    metadata: Optional[Metadata] = None
 
 # --- Callback Function ---
 async def send_final_report(payload: dict):
@@ -23,51 +47,43 @@ async def send_final_report(payload: dict):
         except Exception as e:
             logger.error(f"❌ Failed to report: {e}")
 
-# --- ROBUST ENDPOINT (Manual Parsing like Friend's Code) ---
+# --- 2. INTELLIGENT ENDPOINT ---
 @router.post("/chat")
-async def chat_handler(request: Request, background_tasks: BackgroundTasks):
+async def chat_handler(payload: ScamRequest, background_tasks: BackgroundTasks, x_api_key: str = Header(None)):
     
-    # 1. READ BODY MANUALLY (No Pydantic Validation Errors!)
+    # --- DEBUGGING: PRINT THE RAW PAYLOAD ---
+    print("\n🔻🔻🔻 INCOMING REQUEST START 🔻🔻🔻")
     try:
-        body = await request.json()
-    except Exception:
-        body = {}
+        # This prints exactly what the Tester sent
+        print(payload.model_dump_json(indent=2))
+    except Exception as e:
+        print(f"Could not print payload: {e}")
+    print("🔺🔺🔺 INCOMING REQUEST END 🔺🔺🔺\n")
 
-    # 2. DEBUG LOGS
-    print(f"\n📥 INCOMING: {body}")
-
-    # 3. MANUAL AUTH CHECK
-    # We grab the header directly from the request object
-    x_api_key = request.headers.get("x-api-key")
+    # 1. Auth Check
+    # IMPORTANT: The Tester uses key "AdityaSharma". Ensure your Render Environment Variable matches this!
     valid_key = os.environ.get("API_KEY") 
-
-    if valid_key and x_api_key != valid_key:
-        print(f"❌ Auth Failed. Received: {x_api_key}")
-        # Return 401 JSON so the tester sees a clean error
-        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-
-    # 4. SAFE EXTRACTION (Like Friend's Code)
-    # Use .get() everywhere to prevent crashes
-    session_id = body.get("sessionId", "unknown_session")
     
-    # Handle 'message' safely (it might be a dict or missing)
-    msg_obj = body.get("message", {})
-    if isinstance(msg_obj, dict):
-        user_msg = msg_obj.get("text", "")
-    else:
-        user_msg = str(msg_obj) # Handle case where message is just a string
+    # If using local testing without .env, you can comment the check out temporarily
+    if valid_key and x_api_key != valid_key:
+        print(f"❌ Auth Failed. Received: {x_api_key} | Expected: {valid_key}")
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-    conversation_history = body.get("conversationHistory", [])
-    if conversation_history is None:
-        conversation_history = []
+    # 2. HANDLE TESTER "PING" (The Fix)
+    # If the payload is missing the critical 'message' or 'text', assume it's the Tester tool
+    if not payload.message or not payload.message.text:
+        print("✅ Detected Tester Ping (Empty/Partial Body). Returning Success.")
+        return {
+            "status": "success",
+            "reply": "Connection Successful. HoneyPot is active."
+        }
 
-    # 5. HANDLE EMPTY PINGS (The Tester Check)
-    if not user_msg:
-        print("✅ Detected Empty Ping. Returning Success.")
-        return {"status": "success", "reply": "HoneyPot Active"}
-
-    # --- REAL LOGIC STARTS HERE ---
-    print(f"✅ Processing Message: {user_msg}")
+    # --- FROM HERE, REAL SCAM LOGIC ---
+    
+    user_msg = payload.message.text
+    session_id = payload.sessionId or "unknown_session" # Fallback if missing
+    
+    print(f"✅ Processing Scam Message: {user_msg}")
 
     # State & Intelligence
     get_or_create_session(session_id)
@@ -75,7 +91,8 @@ async def chat_handler(request: Request, background_tasks: BackgroundTasks):
     current_state = update_session(session_id, new_intel)
 
     # AI Processing
-    ai_result = await analyze_and_reply(user_msg, conversation_history)
+    history = payload.conversationHistory if payload.conversationHistory else []
+    ai_result = await analyze_and_reply(user_msg, history)
     
     current_state["totalMessagesExchanged"] += 1
     
