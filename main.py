@@ -36,12 +36,10 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     logger.info("🚀 Scam Honeypot AI Service Starting...")
-    logger.info(f"API Key configured: {bool(API_KEY)}")
-    logger.info(f"Debug mode: {DEBUG}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    logger.info("🛑 Scam Honeypot AI Service Shutting Down...")
+    logger.info("🛑 Service Shutting Down...")
 
 def scam_intent_detected(text: str) -> bool:
     """Detect scam intent based on keywords."""
@@ -67,7 +65,7 @@ def extract_intelligence(messages: List[Dict]) -> Dict:
     bank_pattern = r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"
     link_pattern = r"https?://[^\s]+"
     phone_pattern = r"\+?91[\d\s]{10}|\+?1[\d\s]{10}"
-    keywords = ["urgent", "verify", "account blocked", "otp", "payment", "suspend", "confirm", "immediate", "action required"]
+    keywords = ["urgent", "verify", "account blocked", "otp", "payment", "suspend", "confirm", "immediate"]
 
     for msg in messages:
         text = msg.get("text", "")
@@ -111,8 +109,6 @@ def agent_reply(message: str, history: List[Dict]) -> str:
         return "Why do you need my OTP? I thought that was confidential."
     elif "link" in message_lower or "click" in message_lower:
         return "I'm hesitant to click links from unknown sources. Can you verify your identity first?"
-    elif "password" in message_lower or "pin" in message_lower:
-        return "I will never share my password or PIN with anyone."
     else:
         return "Can you provide more details about what you're saying?"
 
@@ -120,7 +116,6 @@ def send_final_result(session_id: str, scam_detected: bool, total_messages: int,
                       intelligence: Dict, agent_notes: str) -> bool:
     """Send final result to GUVI endpoint."""
     if not session_id:
-        logger.error("Invalid session_id for final result")
         return False
     
     payload = {
@@ -136,13 +131,10 @@ def send_final_result(session_id: str, scam_detected: bool, total_messages: int,
             json=payload,
             timeout=10
         )
-        logger.info(f"✅ Final result sent: {response.status_code}")
+        logger.info(f"Final result sent: {response.status_code}")
         return response.status_code == 200
-    except requests.exceptions.Timeout:
-        logger.error("Timeout sending final result")
-        return False
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ Error sending final result: {e}")
+    except Exception as e:
+        logger.error(f"Error sending final result: {e}")
         return False
 
 @app.head("/")
@@ -151,7 +143,7 @@ async def head_root():
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "Scam Honeypot AI", "version": "1.0"}
+    return {"status": "ok", "service": "Scam Honeypot AI"}
 
 @app.head("/honeypot")
 async def head_honeypot():
@@ -164,26 +156,44 @@ async def honeypot_endpoint(
 ):
     """Main honeypot endpoint."""
     if not x_api_key or x_api_key != API_KEY:
-        logger.warning(f"Invalid API key attempt: {x_api_key}")
-        raise HTTPException(status_code=401, detail="Invalid or missing API Key")
+        raise HTTPException(status_code=401, detail="Invalid API Key")
 
     try:
-        data = await request.json()
+        # Read raw body bytes
+        raw_body = await request.body()
+        
+        # Decode and clean the body
+        if isinstance(raw_body, bytes):
+            body_str = raw_body.decode('utf-8').strip()
+        else:
+            body_str = str(raw_body).strip()
+        
+        # Remove any BOM or extra whitespace
+        body_str = body_str.lstrip('\ufeff')
+        
+        # Parse JSON
+        data = json.loads(body_str)
+        
     except json.JSONDecodeError as e:
-        logger.error(f"JSON Parse Error: {e}")
+        logger.error(f"JSON Parse Error: {str(e)}")
         return JSONResponse(status_code=400, content={
             "status": "error",
-            "message": "Invalid JSON format",
-            "detail": str(e)
+            "message": "Invalid JSON format"
         })
     except Exception as e:
-        logger.error(f"Request parsing error: {e}")
+        logger.error(f"Request error: {str(e)}")
         return JSONResponse(status_code=400, content={
             "status": "error",
             "message": "Failed to parse request"
         })
 
     # Validate required fields
+    if not isinstance(data, dict):
+        return JSONResponse(status_code=400, content={
+            "status": "error",
+            "message": "Request body must be a JSON object"
+        })
+
     if not data.get("sessionId") or not data.get("message"):
         return JSONResponse(status_code=400, content={
             "status": "error",
@@ -215,9 +225,6 @@ async def honeypot_endpoint(
             "scamDetected": scam_detected
         }
 
-        logger.info(f"🔍 Session {session_id}: Scam={scam_detected}, Messages={len(all_messages)}")
-
-        # Send final result if scam detected and enough engagement
         if scam_detected and len(all_messages) >= 3:
             send_final_result(
                 session_id=session_id,
@@ -230,7 +237,7 @@ async def honeypot_endpoint(
         return JSONResponse(content=response_json, status_code=200)
 
     except Exception as e:
-        logger.error(f"Processing error: {e}", exc_info=True)
+        logger.error(f"Processing error: {str(e)}")
         return JSONResponse(status_code=500, content={
             "status": "error",
             "message": "Internal server error"
@@ -244,4 +251,4 @@ async def chat_endpoint(request: Request, x_api_key: Optional[str] = Header(None
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "Scam Honeypot AI", "timestamp": __import__("time").time()}
+    return {"status": "healthy"}
