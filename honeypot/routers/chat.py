@@ -48,9 +48,11 @@ async def send_final_report(payload: dict):
     url = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
     async with httpx.AsyncClient() as client:
         try:
-            logger.info(f"🚀 Sending Final Report for Session: {payload['sessionId']}")
-            logger.info(f"📊 Payload: {json.dumps(payload, indent=2)}")
-            response = await client.post(url, json=payload, timeout=10.0)
+            # Ensure payload is JSON serializable
+            json_payload = json.loads(json.dumps(payload))
+            logger.info(f"🚀 Sending Final Report for Session: {json_payload['sessionId']}")
+            logger.info(f"📊 Payload: {json.dumps(json_payload, indent=2)}")
+            response = await client.post(url, json=json_payload, timeout=10.0)
             logger.info(f"✅ Report Status: {response.status_code}")
             logger.info(f"📝 Response: {response.text}")
         except Exception as e:
@@ -153,18 +155,21 @@ async def chat_handler(
     should_report = should_send_report(session_id)
     
     if should_report and not session_state.get("report_sent", False):
-        # Ensure all data is JSON serializable
-        extracted_intel = session_state["extractedIntelligence"].copy()
-        for key in extracted_intel:
-            extracted_intel[key] = [str(item) for item in extracted_intel[key]]
-        
+        # Ensure all data is JSON serializable with proper structure
         final_payload = {
             "sessionId": str(session_id),
             "scamDetected": True,
             "totalMessagesExchanged": int(session_state["totalMessagesExchanged"]),
-            "extractedIntelligence": extracted_intel,
-            "agentNotes": f"Scammer engaged in {session_state['totalMessagesExchanged']} messages on {channel} ({language}). Used urgency and authority tactics."
+            "extractedIntelligence": {
+                "bankAccounts": [str(x) for x in session_state["extractedIntelligence"].get("bankAccounts", [])],
+                "upiIds": [str(x) for x in session_state["extractedIntelligence"].get("upiIds", [])],
+                "phishingLinks": [str(x) for x in session_state["extractedIntelligence"].get("phishingLinks", [])],
+                "phoneNumbers": [str(x) for x in session_state["extractedIntelligence"].get("phoneNumbers", [])],
+                "suspiciousKeywords": [str(x) for x in session_state["extractedIntelligence"].get("suspiciousKeywords", [])]
+            },
+            "agentNotes": f"Scammer engaged in {int(session_state['totalMessagesExchanged'])} messages on {str(channel)} ({str(language)}). Used urgency and authority tactics."
         }
+        logger.info(f"📋 Final Payload: {json.dumps(final_payload)}")
         logger.info(f"📋 Scheduling Report Send for Session: {session_id}")
         background_tasks.add_task(send_final_report, final_payload)
         mark_report_sent(session_id)
